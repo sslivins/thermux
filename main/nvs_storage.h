@@ -68,4 +68,21 @@ esp_err_t nvs_storage_load_wifi_config(char *ssid, size_t ssid_len,
  */
 esp_err_t nvs_storage_factory_reset(void);
 
+/**
+ * @brief Save sensor timing and resolution settings
+ * @param read_interval_ms Sensor read interval in milliseconds
+ * @param publish_interval_ms MQTT publish interval in milliseconds
+ * @param resolution Sensor resolution (9-12 bits)
+ */
+esp_err_t nvs_storage_save_sensor_settings(uint32_t read_interval_ms, uint32_t publish_interval_ms, uint8_t resolution);
+
+/**
+ * @brief Load sensor timing and resolution settings
+ * @param read_interval_ms Output: Sensor read interval in milliseconds
+ * @param publish_interval_ms Output: MQTT publish interval in milliseconds
+ * @param resolution Output: Sensor resolution (9-12 bits)
+ * @return ESP_OK if found, ESP_ERR_NOT_FOUND if not configured
+ */
+esp_err_t nvs_storage_load_sensor_settings(uint32_t *read_interval_ms, uint32_t *publish_interval_ms, uint8_t *resolution);
+
 #endif /* NVS_STORAGE_H */

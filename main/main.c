@@ -37,6 +37,24 @@ const int NETWORK_CONNECTED_BIT = BIT0;
 /* Application version - update for each release */
 const char *APP_VERSION = "1.0.0";
 
+/* Runtime sensor settings (can be changed via web UI) */
+static uint32_t s_read_interval_ms = CONFIG_SENSOR_READ_INTERVAL_MS;
+static uint32_t s_publish_interval_ms = CONFIG_SENSOR_PUBLISH_INTERVAL_MS;
+
+/* Accessor functions for sensor settings */
+uint32_t get_sensor_read_interval(void) { return s_read_interval_ms; }
+uint32_t get_sensor_publish_interval(void) { return s_publish_interval_ms; }
+
+void set_sensor_read_interval(uint32_t ms) { 
+    s_read_interval_ms = ms; 
+    ESP_LOGI(TAG, "Read interval set to %lu ms", ms);
+}
+
+void set_sensor_publish_interval(uint32_t ms) { 
+    s_publish_interval_ms = ms; 
+    ESP_LOGI(TAG, "Publish interval set to %lu ms", ms);
+}
+
 /**
  * @brief Initialize mDNS service for device discovery
  */
@@ -86,7 +104,7 @@ static void temperature_task(void *pvParameters)
         /* Read all connected sensors */
         sensor_manager_read_all();
         
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_SENSOR_READ_INTERVAL_MS));
+        vTaskDelay(pdMS_TO_TICKS(s_read_interval_ms));
     }
 }
 
@@ -105,7 +123,7 @@ static void mqtt_publish_task(void *pvParameters)
             sensor_manager_publish_all();
         }
         
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_SENSOR_PUBLISH_INTERVAL_MS));
+        vTaskDelay(pdMS_TO_TICKS(s_publish_interval_ms));
     }
 }
 
@@ -174,8 +192,34 @@ void app_main(void)
     /* Initialize NVS storage for our app data */
     ESP_ERROR_CHECK(nvs_storage_init());
 
+    /* Load sensor settings from NVS (or use defaults) */
+    {
+        uint32_t read_ms, publish_ms;
+        uint8_t resolution;
+        if (nvs_storage_load_sensor_settings(&read_ms, &publish_ms, &resolution) == ESP_OK) {
+            s_read_interval_ms = read_ms;
+            s_publish_interval_ms = publish_ms;
+            ESP_LOGI(TAG, "Loaded sensor settings: read=%lums, publish=%lums, resolution=%d",
+                     read_ms, publish_ms, resolution);
+            /* Resolution will be applied after onewire_temp_init */
+        } else {
+            ESP_LOGI(TAG, "Using default sensor settings");
+        }
+    }
+
     /* Initialize 1-Wire bus and discover sensors */
     ESP_ERROR_CHECK(onewire_temp_init(CONFIG_ONEWIRE_GPIO));
+
+    /* Apply saved resolution setting */
+    {
+        uint32_t read_ms, publish_ms;
+        uint8_t resolution;
+        if (nvs_storage_load_sensor_settings(&read_ms, &publish_ms, &resolution) == ESP_OK) {
+            if (resolution >= 9 && resolution <= 12) {
+                onewire_temp_set_resolution(resolution);
+            }
+        }
+    }
     
     /* Initialize sensor manager */
     ESP_ERROR_CHECK(sensor_manager_init());

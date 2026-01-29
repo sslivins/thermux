@@ -204,3 +204,49 @@ esp_err_t nvs_storage_factory_reset(void)
     ESP_LOGI(TAG, "Factory reset complete");
     return err;
 }
+
+esp_err_t nvs_storage_save_sensor_settings(uint32_t read_interval_ms, uint32_t publish_interval_ms, uint8_t resolution)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    nvs_set_u32(handle, "read_interval", read_interval_ms);
+    nvs_set_u32(handle, "pub_interval", publish_interval_ms);
+    nvs_set_u8(handle, "resolution", resolution);
+
+    err = nvs_commit(handle);
+    nvs_close(handle);
+
+    ESP_LOGI(TAG, "Saved sensor settings: read=%lums, publish=%lums, resolution=%d bits",
+             read_interval_ms, publish_interval_ms, resolution);
+    return err;
+}
+
+esp_err_t nvs_storage_load_sensor_settings(uint32_t *read_interval_ms, uint32_t *publish_interval_ms, uint8_t *resolution)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = nvs_get_u32(handle, "read_interval", read_interval_ms);
+    if (err != ESP_OK) {
+        nvs_close(handle);
+        return err;
+    }
+
+    nvs_get_u32(handle, "pub_interval", publish_interval_ms);
+    nvs_get_u8(handle, "resolution", resolution);
+
+    nvs_close(handle);
+    return ESP_OK;
+}

@@ -7,6 +7,7 @@
 #include "sensor_manager.h"
 #include "ota_updater.h"
 #include "nvs_storage.h"
+#include "onewire_temp.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -32,7 +33,7 @@ static const char INDEX_HTML[] = R"rawliteral(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 Temperature Monitor</title>
+    <title>Temperature Monitor</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
@@ -159,7 +160,7 @@ static const char INDEX_HTML[] = R"rawliteral(
 </head>
 <body>
     <div class="container">
-        <h1>🌡️ ESP32 Temperature Monitor</h1>
+        <h1>🌡️ Temperature Monitor</h1>
         <div class="version" id="version">Version loading...</div>
         
         <div class="status-bar">
@@ -190,8 +191,12 @@ static const char INDEX_HTML[] = R"rawliteral(
     <script>
         let sensors = [];
         let updateInterval;
+        let isEditing = false;  // Track if user is editing an input
 
         async function fetchSensors() {
+            // Skip update if user is editing a field
+            if (isEditing) return;
+            
             try {
                 const response = await fetch('/api/sensors');
                 sensors = await response.json();
@@ -230,6 +235,8 @@ static const char INDEX_HTML[] = R"rawliteral(
                     <input type="text" class="sensor-name-input" 
                            placeholder="Enter friendly name" 
                            value="${sensor.friendly_name || ''}"
+                           onfocus="isEditing = true"
+                           onblur="isEditing = false"
                            onkeypress="if(event.key==='Enter') saveName('${sensor.address}', this.value)">
                     <button class="btn btn-primary" onclick="saveName('${sensor.address}', this.previousElementSibling.value)">
                         Save Name
@@ -314,7 +321,7 @@ static const char CONFIG_HTML[] = R"rawliteral(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 Settings</title>
+    <title>Settings</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
@@ -473,6 +480,37 @@ static const char CONFIG_HTML[] = R"rawliteral(
             </form>
         </div>
 
+        <!-- Sensor Configuration -->
+        <div class="config-section">
+            <div class="section-title">🌡️ Sensor Configuration</div>
+            <form id="sensor-form">
+                <div class="form-group">
+                    <label for="read-interval">Read Interval (seconds)</label>
+                    <div class="current-value" id="read-interval-current">Current: Loading...</div>
+                    <input type="number" id="read-interval" name="read_interval" min="1" max="300" placeholder="10">
+                    <div class="form-hint">How often to read temperature from sensors (1-300 seconds)</div>
+                </div>
+                <div class="form-group">
+                    <label for="publish-interval">MQTT Publish Interval (seconds)</label>
+                    <div class="current-value" id="publish-interval-current">Current: Loading...</div>
+                    <input type="number" id="publish-interval" name="publish_interval" min="5" max="600" placeholder="10">
+                    <div class="form-hint">How often to send readings to Home Assistant (5-600 seconds)</div>
+                </div>
+                <div class="form-group">
+                    <label for="resolution">Sensor Resolution</label>
+                    <div class="current-value" id="resolution-current">Current: Loading...</div>
+                    <select id="resolution" name="resolution">
+                        <option value="9">9-bit (0.5°C, ~94ms)</option>
+                        <option value="10">10-bit (0.25°C, ~188ms)</option>
+                        <option value="11">11-bit (0.125°C, ~375ms)</option>
+                        <option value="12">12-bit (0.0625°C, ~750ms)</option>
+                    </select>
+                    <div class="form-hint">Higher resolution = more precision but slower readings</div>
+                </div>
+                <button type="submit" class="btn btn-primary">💾 Save Sensor Settings</button>
+            </form>
+        </div>
+
         <!-- System Actions -->
         <div class="config-section danger-zone">
             <div class="section-title">⚠️ System</div>
@@ -507,6 +545,16 @@ static const char CONFIG_HTML[] = R"rawliteral(
                 const mqttBadge = document.getElementById('mqtt-status');
                 mqttBadge.textContent = status.mqtt_connected ? 'Connected' : 'Disconnected';
                 mqttBadge.className = 'status-badge ' + (status.mqtt_connected ? 'status-connected' : 'status-disconnected');
+
+                // Load Sensor config
+                const sensorResp = await fetch('/api/config/sensor');
+                const sensor = await sensorResp.json();
+                document.getElementById('read-interval-current').textContent = 'Current: ' + (sensor.read_interval / 1000) + ' seconds';
+                document.getElementById('publish-interval-current').textContent = 'Current: ' + (sensor.publish_interval / 1000) + ' seconds';
+                document.getElementById('resolution-current').textContent = 'Current: ' + sensor.resolution + '-bit';
+                document.getElementById('read-interval').value = sensor.read_interval / 1000;
+                document.getElementById('publish-interval').value = sensor.publish_interval / 1000;
+                document.getElementById('resolution').value = sensor.resolution;
             } catch (err) {
                 showToast('Failed to load configuration', true);
             }
@@ -606,6 +654,42 @@ static const char CONFIG_HTML[] = R"rawliteral(
                 showToast('Factory reset initiated');
             }
         }
+
+        document.getElementById('sensor-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const readInterval = parseInt(document.getElementById('read-interval').value) * 1000;
+            const publishInterval = parseInt(document.getElementById('publish-interval').value) * 1000;
+            const resolution = parseInt(document.getElementById('resolution').value);
+            
+            if (readInterval < 1000 || readInterval > 300000) {
+                showToast('Read interval must be 1-300 seconds', true);
+                return;
+            }
+            if (publishInterval < 5000 || publishInterval > 600000) {
+                showToast('Publish interval must be 5-600 seconds', true);
+                return;
+            }
+            
+            try {
+                const resp = await fetch('/api/config/sensor', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        read_interval: readInterval, 
+                        publish_interval: publishInterval,
+                        resolution: resolution
+                    })
+                });
+                if (resp.ok) {
+                    showToast('Sensor settings saved');
+                    loadConfig();
+                } else {
+                    showToast('Failed to save sensor settings', true);
+                }
+            } catch (err) {
+                showToast('Error saving sensor settings', true);
+            }
+        });
 
         function showToast(message, isError = false) {
             const toast = document.getElementById('toast');
@@ -730,6 +814,8 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
         }
     }
 
+    ESP_LOGI("web_server", "Set name request for address: '%s'", address);
+
     if (strlen(address) == 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid address");
         return ESP_FAIL;
@@ -743,6 +829,8 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
     content[ret] = '\0';
+
+    ESP_LOGI("web_server", "Request body: %s", content);
 
     /* Parse JSON */
     cJSON *root = cJSON_Parse(content);
@@ -761,8 +849,14 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
     esp_err_t err = sensor_manager_set_friendly_name(address, name_item->valuestring);
     cJSON_Delete(root);
 
+    if (err != ESP_OK) {
+        ESP_LOGE("web_server", "Failed to set friendly name: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Sensor not found");
+        return ESP_FAIL;
+    }
+
     cJSON *response = cJSON_CreateObject();
-    cJSON_AddBoolToObject(response, "success", err == ESP_OK);
+    cJSON_AddBoolToObject(response, "success", true);
 
     char *json = cJSON_PrintUnformatted(response);
     cJSON_Delete(response);
@@ -1082,6 +1176,101 @@ static esp_err_t api_mqtt_reconnect_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* External accessor functions from main.c */
+extern uint32_t get_sensor_read_interval(void);
+extern uint32_t get_sensor_publish_interval(void);
+extern void set_sensor_read_interval(uint32_t ms);
+extern void set_sensor_publish_interval(uint32_t ms);
+
+/**
+ * @brief Handler for GET /api/config/sensor
+ */
+static esp_err_t api_config_sensor_get_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "read_interval", get_sensor_read_interval());
+    cJSON_AddNumberToObject(root, "publish_interval", get_sensor_publish_interval());
+    cJSON_AddNumberToObject(root, "resolution", onewire_temp_get_resolution());
+    
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/config/sensor
+ */
+static esp_err_t api_config_sensor_post_handler(httpd_req_t *req)
+{
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_FAIL;
+    }
+    content[ret] = '\0';
+    
+    cJSON *root = cJSON_Parse(content);
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+    
+    cJSON *read_item = cJSON_GetObjectItem(root, "read_interval");
+    cJSON *publish_item = cJSON_GetObjectItem(root, "publish_interval");
+    cJSON *resolution_item = cJSON_GetObjectItem(root, "resolution");
+    
+    uint32_t read_interval = get_sensor_read_interval();
+    uint32_t publish_interval = get_sensor_publish_interval();
+    uint8_t resolution = onewire_temp_get_resolution();
+    
+    if (cJSON_IsNumber(read_item)) {
+        read_interval = (uint32_t)read_item->valueint;
+        if (read_interval < 1000) read_interval = 1000;
+        if (read_interval > 300000) read_interval = 300000;
+        set_sensor_read_interval(read_interval);
+    }
+    
+    if (cJSON_IsNumber(publish_item)) {
+        publish_interval = (uint32_t)publish_item->valueint;
+        if (publish_interval < 5000) publish_interval = 5000;
+        if (publish_interval > 600000) publish_interval = 600000;
+        set_sensor_publish_interval(publish_interval);
+    }
+    
+    if (cJSON_IsNumber(resolution_item)) {
+        resolution = (uint8_t)resolution_item->valueint;
+        if (resolution >= 9 && resolution <= 12) {
+            onewire_temp_set_resolution(resolution);
+        }
+    }
+    
+    cJSON_Delete(root);
+    
+    /* Save to NVS */
+    esp_err_t err = nvs_storage_save_sensor_settings(read_interval, publish_interval, resolution);
+    
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", err == ESP_OK);
+    if (err == ESP_OK) {
+        cJSON_AddStringToObject(response, "message", "Sensor settings saved");
+    }
+    
+    char *json = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    
+    return ESP_OK;
+}
+
 /**
  * @brief Handler for POST /api/system/restart
  */
@@ -1185,7 +1374,7 @@ esp_err_t web_server_start(void)
     httpd_register_uri_handler(s_server, &rescan_uri);
 
     httpd_uri_t sensor_name_uri = {
-        .uri = "/api/sensors/*/name",
+        .uri = "/api/sensors/*",
         .method = HTTP_POST,
         .handler = api_sensor_name_handler,
     };
@@ -1249,6 +1438,21 @@ esp_err_t web_server_start(void)
         .handler = api_mqtt_reconnect_handler,
     };
     httpd_register_uri_handler(s_server, &mqtt_reconnect_uri);
+
+    /* Sensor config endpoints */
+    httpd_uri_t sensor_config_get_uri = {
+        .uri = "/api/config/sensor",
+        .method = HTTP_GET,
+        .handler = api_config_sensor_get_handler,
+    };
+    httpd_register_uri_handler(s_server, &sensor_config_get_uri);
+
+    httpd_uri_t sensor_config_post_uri = {
+        .uri = "/api/config/sensor",
+        .method = HTTP_POST,
+        .handler = api_config_sensor_post_handler,
+    };
+    httpd_register_uri_handler(s_server, &sensor_config_post_uri);
 
     /* System endpoints */
     httpd_uri_t system_restart_uri = {

@@ -112,14 +112,14 @@ menu "ESP32 POE Temperature Monitor Configuration"
 
         config GITHUB_OWNER
             string "GitHub Repository Owner"
-            default "your-username"
+            default "sslivins"
             depends on OTA_ENABLED
             help
                 GitHub username or organization
 
         config GITHUB_REPO
             string "GitHub Repository Name"
-            default "esp32-poe-temp-monitor"
+            default "temp-monitor"
             depends on OTA_ENABLED
             help
                 GitHub repository name
