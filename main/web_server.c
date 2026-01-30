@@ -11,10 +11,15 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_ota_ops.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
+
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
 
 static const char *TAG = "web_server";
 static httpd_handle_t s_server = NULL;
@@ -298,6 +303,134 @@ static esp_err_t api_ota_update_handler(httpd_req_t *req)
 #endif
     
     return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/ota/upload - Manual firmware upload
+ */
+static esp_err_t api_ota_upload_handler(httpd_req_t *req)
+{
+    esp_err_t err;
+    esp_ota_handle_t ota_handle = 0;
+    const esp_partition_t *update_partition = NULL;
+    char *buf = NULL;
+    int received = 0;
+    int remaining = req->content_len;
+    bool ota_started = false;
+    
+    ESP_LOGI(TAG, "Starting manual firmware upload, size: %d bytes", req->content_len);
+    
+    /* Validate content length */
+    if (req->content_len == 0 || req->content_len > 1500000) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Invalid firmware size\"}");
+        return ESP_FAIL;
+    }
+    
+    /* Allocate receive buffer */
+    buf = malloc(4096);
+    if (!buf) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Memory allocation failed\"}");
+        return ESP_FAIL;
+    }
+    
+    /* Get update partition */
+    update_partition = esp_ota_get_next_update_partition(NULL);
+    if (!update_partition) {
+        ESP_LOGE(TAG, "No update partition found");
+        free(buf);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"No update partition available\"}");
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "Writing to partition: %s at 0x%lx", update_partition->label, update_partition->address);
+    
+    /* Begin OTA */
+    err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+        free(buf);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Failed to start OTA\"}");
+        return ESP_FAIL;
+    }
+    ota_started = true;
+    
+    /* Receive and write firmware data */
+    while (remaining > 0) {
+        int recv_len = httpd_req_recv(req, buf, MIN(remaining, 4096));
+        if (recv_len < 0) {
+            if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            ESP_LOGE(TAG, "Receive error: %d", recv_len);
+            goto upload_error;
+        }
+        
+        err = esp_ota_write(ota_handle, buf, recv_len);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
+            goto upload_error;
+        }
+        
+        received += recv_len;
+        remaining -= recv_len;
+        
+        if (received % 102400 == 0) {
+            ESP_LOGI(TAG, "Upload progress: %d/%d bytes", received, req->content_len);
+        }
+    }
+    
+    /* Finish OTA */
+    err = esp_ota_end(ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(err));
+        free(buf);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Firmware validation failed\"}");
+        return ESP_FAIL;
+    }
+    
+    /* Set boot partition */
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
+        free(buf);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Failed to set boot partition\"}");
+        return ESP_FAIL;
+    }
+    
+    free(buf);
+    
+    ESP_LOGI(TAG, "Manual firmware upload complete, restarting...");
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Firmware uploaded successfully, restarting...\"}");
+    
+    /* Restart after short delay to allow response to be sent */
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
+    
+    return ESP_OK;
+
+upload_error:
+    if (ota_started) {
+        esp_ota_abort(ota_handle);
+    }
+    free(buf);
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Upload failed\"}");
+    return ESP_FAIL;
 }
 
 /**
@@ -734,6 +867,13 @@ esp_err_t web_server_start(void)
         .handler = api_ota_update_handler,
     };
     httpd_register_uri_handler(s_server, &ota_update_uri);
+
+    httpd_uri_t ota_upload_uri = {
+        .uri = "/api/ota/upload",
+        .method = HTTP_POST,
+        .handler = api_ota_upload_handler,
+    };
+    httpd_register_uri_handler(s_server, &ota_upload_uri);
 
     /* Configuration page */
     httpd_uri_t config_uri = {

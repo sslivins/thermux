@@ -14,11 +14,33 @@
             padding: 20px;
         }
         .container { max-width: 1200px; margin: 0 auto; }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .header-spacer { width: 44px; }
         h1 { 
             text-align: center; 
-            margin-bottom: 10px;
             font-size: 2em;
+            flex: 1;
         }
+        .settings-btn {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #fff;
+            font-size: 1.4em;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .settings-btn:hover { background: rgba(255,255,255,0.2); }
         .version { 
             text-align: center; 
             color: #888; 
@@ -130,7 +152,11 @@
 </head>
 <body>
     <div class="container">
-        <h1>🌡️ Temperature Monitor</h1>
+        <div class="header">
+            <div class="header-spacer"></div>
+            <h1>🌡️ Temperature Monitor</h1>
+            <button class="settings-btn" onclick="location.href='/config'" title="Settings">⚙️</button>
+        </div>
         <div class="version" id="version">Version loading...</div>
         
         <div class="status-bar">
@@ -151,8 +177,6 @@
 
         <div class="actions">
             <button class="btn btn-secondary" onclick="rescanSensors()">🔄 Rescan Sensors</button>
-            <button class="btn btn-secondary" onclick="location.href='/ota'">📦 Updates</button>
-            <button class="btn btn-secondary" onclick="location.href='/config'">⚙️ Settings</button>
         </div>
     </div>
 
