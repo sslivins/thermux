@@ -923,7 +923,7 @@ esp_err_t web_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = CONFIG_WEB_SERVER_PORT;
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 20;  /* Increased for config endpoints */
+    config.max_uri_handlers = 25;  /* 22 endpoints + room for future */
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
@@ -931,62 +931,70 @@ esp_err_t web_server_start(void)
         return err;
     }
 
+    /* Helper macro to register URI handler with error checking */
+    #define REGISTER_URI(uri_cfg) do { \
+        esp_err_t ret = httpd_register_uri_handler(s_server, &uri_cfg); \
+        if (ret != ESP_OK) { \
+            ESP_LOGE(TAG, "ERROR: Failed to register %s - increase max_uri_handlers!", uri_cfg.uri); \
+        } \
+    } while(0)
+
     /* Register URI handlers */
     httpd_uri_t index_uri = {
         .uri = "/",
         .method = HTTP_GET,
         .handler = index_get_handler,
     };
-    httpd_register_uri_handler(s_server, &index_uri);
+    REGISTER_URI(index_uri);
 
     httpd_uri_t status_uri = {
         .uri = "/api/status",
         .method = HTTP_GET,
         .handler = api_status_handler,
     };
-    httpd_register_uri_handler(s_server, &status_uri);
+    REGISTER_URI(status_uri);
 
     httpd_uri_t sensors_uri = {
         .uri = "/api/sensors",
         .method = HTTP_GET,
         .handler = api_sensors_get_handler,
     };
-    httpd_register_uri_handler(s_server, &sensors_uri);
+    REGISTER_URI(sensors_uri);
 
     httpd_uri_t rescan_uri = {
         .uri = "/api/sensors/rescan",
         .method = HTTP_POST,
         .handler = api_sensors_rescan_handler,
     };
-    httpd_register_uri_handler(s_server, &rescan_uri);
+    REGISTER_URI(rescan_uri);
 
     httpd_uri_t sensor_name_uri = {
         .uri = "/api/sensors/*",
         .method = HTTP_POST,
         .handler = api_sensor_name_handler,
     };
-    httpd_register_uri_handler(s_server, &sensor_name_uri);
+    REGISTER_URI(sensor_name_uri);
 
     httpd_uri_t ota_check_uri = {
         .uri = "/api/ota/check",
         .method = HTTP_POST,
         .handler = api_ota_check_handler,
     };
-    httpd_register_uri_handler(s_server, &ota_check_uri);
+    REGISTER_URI(ota_check_uri);
 
     httpd_uri_t ota_update_uri = {
         .uri = "/api/ota/update",
         .method = HTTP_POST,
         .handler = api_ota_update_handler,
     };
-    httpd_register_uri_handler(s_server, &ota_update_uri);
+    REGISTER_URI(ota_update_uri);
 
     httpd_uri_t ota_upload_uri = {
         .uri = "/api/ota/upload",
         .method = HTTP_POST,
         .handler = api_ota_upload_handler,
     };
-    httpd_register_uri_handler(s_server, &ota_upload_uri);
+    REGISTER_URI(ota_upload_uri);
 
     /* Configuration page */
     httpd_uri_t config_uri = {
@@ -994,7 +1002,7 @@ esp_err_t web_server_start(void)
         .method = HTTP_GET,
         .handler = config_get_handler,
     };
-    httpd_register_uri_handler(s_server, &config_uri);
+    REGISTER_URI(config_uri);
 
     /* OTA Update page */
     httpd_uri_t ota_page_uri = {
@@ -1002,7 +1010,7 @@ esp_err_t web_server_start(void)
         .method = HTTP_GET,
         .handler = ota_page_handler,
     };
-    httpd_register_uri_handler(s_server, &ota_page_uri);
+    REGISTER_URI(ota_page_uri);
 
     /* WiFi scan endpoint */
     httpd_uri_t wifi_scan_uri = {
@@ -1010,7 +1018,7 @@ esp_err_t web_server_start(void)
         .method = HTTP_GET,
         .handler = api_wifi_scan_handler,
     };
-    httpd_register_uri_handler(s_server, &wifi_scan_uri);
+    REGISTER_URI(wifi_scan_uri);
 
     /* Log viewer endpoints */
     httpd_uri_t logs_get_uri = {
@@ -1018,14 +1026,14 @@ esp_err_t web_server_start(void)
         .method = HTTP_GET,
         .handler = api_logs_get_handler,
     };
-    httpd_register_uri_handler(s_server, &logs_get_uri);
+    REGISTER_URI(logs_get_uri);
 
     httpd_uri_t logs_clear_uri = {
         .uri = "/api/logs/clear",
         .method = HTTP_POST,
         .handler = api_logs_clear_handler,
     };
-    httpd_register_uri_handler(s_server, &logs_clear_uri);
+    REGISTER_URI(logs_clear_uri);
 
     /* WiFi config endpoints */
     httpd_uri_t wifi_config_get_uri = {
@@ -1033,14 +1041,14 @@ esp_err_t web_server_start(void)
         .method = HTTP_GET,
         .handler = api_config_wifi_get_handler,
     };
-    httpd_register_uri_handler(s_server, &wifi_config_get_uri);
+    REGISTER_URI(wifi_config_get_uri);
 
     httpd_uri_t wifi_config_post_uri = {
         .uri = "/api/config/wifi",
         .method = HTTP_POST,
         .handler = api_config_wifi_post_handler,
     };
-    httpd_register_uri_handler(s_server, &wifi_config_post_uri);
+    REGISTER_URI(wifi_config_post_uri);
 
     /* MQTT config endpoints */
     httpd_uri_t mqtt_config_get_uri = {
@@ -1048,21 +1056,21 @@ esp_err_t web_server_start(void)
         .method = HTTP_GET,
         .handler = api_config_mqtt_get_handler,
     };
-    httpd_register_uri_handler(s_server, &mqtt_config_get_uri);
+    REGISTER_URI(mqtt_config_get_uri);
 
     httpd_uri_t mqtt_config_post_uri = {
         .uri = "/api/config/mqtt",
         .method = HTTP_POST,
         .handler = api_config_mqtt_post_handler,
     };
-    httpd_register_uri_handler(s_server, &mqtt_config_post_uri);
+    REGISTER_URI(mqtt_config_post_uri);
 
     httpd_uri_t mqtt_reconnect_uri = {
         .uri = "/api/mqtt/reconnect",
         .method = HTTP_POST,
         .handler = api_mqtt_reconnect_handler,
     };
-    httpd_register_uri_handler(s_server, &mqtt_reconnect_uri);
+    REGISTER_URI(mqtt_reconnect_uri);
 
     /* Sensor config endpoints */
     httpd_uri_t sensor_config_get_uri = {
@@ -1070,14 +1078,14 @@ esp_err_t web_server_start(void)
         .method = HTTP_GET,
         .handler = api_config_sensor_get_handler,
     };
-    httpd_register_uri_handler(s_server, &sensor_config_get_uri);
+    REGISTER_URI(sensor_config_get_uri);
 
     httpd_uri_t sensor_config_post_uri = {
         .uri = "/api/config/sensor",
         .method = HTTP_POST,
         .handler = api_config_sensor_post_handler,
     };
-    httpd_register_uri_handler(s_server, &sensor_config_post_uri);
+    REGISTER_URI(sensor_config_post_uri);
 
     /* System endpoints */
     httpd_uri_t system_restart_uri = {
@@ -1085,14 +1093,14 @@ esp_err_t web_server_start(void)
         .method = HTTP_POST,
         .handler = api_system_restart_handler,
     };
-    httpd_register_uri_handler(s_server, &system_restart_uri);
+    REGISTER_URI(system_restart_uri);
 
     httpd_uri_t factory_reset_uri = {
         .uri = "/api/system/factory-reset",
         .method = HTTP_POST,
         .handler = api_system_factory_reset_handler,
     };
-    httpd_register_uri_handler(s_server, &factory_reset_uri);
+    REGISTER_URI(factory_reset_uri);
 
     ESP_LOGI(TAG, "Web server started");
     return ESP_OK;
