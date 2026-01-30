@@ -9,7 +9,8 @@ A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assi
 - **Web Interface** - Configuration and monitoring via built-in web server
 - **OTA Updates** - Over-the-air firmware updates from GitHub releases or manual upload
 - **Ethernet & WiFi** - Primary Ethernet with WiFi fallback
-- **mDNS** - Access via `tempmon-XXXX.local` (where XXXX is last 4 digits of MAC)
+- **mDNS** - Access via `temp-monitor.local` (auto-increments on collision: temp-monitor-2.local, etc.)
+- **Service Discovery** - Discoverable via `_tempmon._tcp` and `_http._tcp` services
 - **Sensor Naming** - Assign friendly names to sensors via web UI
 
 ## Hardware Requirements
@@ -52,7 +53,9 @@ Or use the ESP-IDF VS Code extension build/flash commands.
 
 ## Configuration
 
-After flashing, access the web interface at `http://tempmon-XXXX.local` or the device IP.
+After flashing, access the web interface at `http://temp-monitor.local` or the device IP.
+
+> **Note**: If multiple devices are on the network, subsequent devices will be `temp-monitor-2.local`, `temp-monitor-3.local`, etc.
 
 ### Web Interface Pages
 

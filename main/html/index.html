@@ -72,11 +72,55 @@
             border-radius: 15px;
             padding: 20px;
             border: 1px solid rgba(255,255,255,0.1);
-            transition: transform 0.2s, box-shadow 0.2s;
+            transition: transform 0.2s, box-shadow 0.2s, border-color 0.3s, background 0.3s;
         }
         .sensor-card:hover {
             transform: translateY(-5px);
             box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        .sensor-card.changed {
+            border-color: #f59e0b;
+            background: rgba(245, 158, 11, 0.15);
+            animation: pulse 1s ease-in-out;
+        }
+        .sensor-card.changed-major {
+            border-color: #ef4444;
+            background: rgba(239, 68, 68, 0.2);
+            animation: pulse 0.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+            50% { box-shadow: 0 0 20px 5px rgba(245, 158, 11, 0.6); }
+        }
+        .change-indicator {
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+        .change-indicator.warming { color: #ef4444; }
+        .change-indicator.cooling { color: #3b82f6; }
+        .sort-controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .sort-controls label {
+            color: #888;
+            font-size: 0.9em;
+        }
+        .sort-controls select {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            font-size: 0.9em;
+        }
+        .sort-controls select option {
+            background: #1a1a2e;
+            color: #fff;
         }
         .sensor-temp {
             font-size: 3em;
@@ -171,6 +215,23 @@
             </div>
         </div>
 
+        <div class="sort-controls">
+            <label for="sort-select">Sort by:</label>
+            <select id="sort-select" onchange="renderSensors()">
+                <option value="name">Name</option>
+                <option value="address">Address</option>
+                <option value="temp">Temperature</option>
+                <option value="change" selected>Recent Change</option>
+            </select>
+            <label title="Highlight sensors that changed more than this">Threshold:</label>
+            <select id="threshold-select" onchange="renderSensors()">
+                <option value="0.5">0.5°C</option>
+                <option value="1" selected>1°C</option>
+                <option value="2">2°C</option>
+                <option value="5">5°C</option>
+            </select>
+        </div>
+
         <div class="sensors-grid" id="sensors-grid">
             <div class="sensor-card loading">Loading sensors...</div>
         </div>
@@ -184,6 +245,8 @@
 
     <script>
         let sensors = [];
+        let previousTemps = {};  /* Track previous temps for change detection */
+        let changeAmounts = {};  /* Track recent change amounts */
         let updateInterval;
         let isEditing = false;
 
@@ -191,7 +254,28 @@
             if (isEditing) return;
             try {
                 const response = await fetch('/api/sensors');
-                sensors = await response.json();
+                const newSensors = await response.json();
+                
+                /* Calculate changes from previous readings */
+                const threshold = parseFloat(document.getElementById('threshold-select').value);
+                newSensors.forEach(sensor => {
+                    if (previousTemps[sensor.address] !== undefined && sensor.valid) {
+                        const change = sensor.temperature - previousTemps[sensor.address];
+                        /* Keep track of significant changes (decay over time) */
+                        const prevChange = changeAmounts[sensor.address] || 0;
+                        if (Math.abs(change) >= threshold * 0.5) {
+                            changeAmounts[sensor.address] = change;
+                        } else {
+                            /* Decay the change indicator gradually */
+                            changeAmounts[sensor.address] = prevChange * 0.7;
+                        }
+                    }
+                    if (sensor.valid) {
+                        previousTemps[sensor.address] = sensor.temperature;
+                    }
+                });
+                
+                sensors = newSensors;
                 renderSensors();
                 document.getElementById('sensor-count').textContent = sensors.length;
                 document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
@@ -218,11 +302,50 @@
                 grid.innerHTML = '<div class="sensor-card">No sensors found. Click "Rescan Sensors" to detect connected sensors.</div>';
                 return;
             }
-            grid.innerHTML = sensors.map(sensor => `
-                <div class="sensor-card" data-address="${sensor.address}">
+            
+            const sortBy = document.getElementById('sort-select').value;
+            const threshold = parseFloat(document.getElementById('threshold-select').value);
+            
+            /* Sort sensors based on selection */
+            let sortedSensors = [...sensors];
+            switch (sortBy) {
+                case 'name':
+                    sortedSensors.sort((a, b) => (a.friendly_name || a.address).localeCompare(b.friendly_name || b.address));
+                    break;
+                case 'address':
+                    sortedSensors.sort((a, b) => a.address.localeCompare(b.address));
+                    break;
+                case 'temp':
+                    sortedSensors.sort((a, b) => (b.temperature || 0) - (a.temperature || 0));
+                    break;
+                case 'change':
+                    sortedSensors.sort((a, b) => Math.abs(changeAmounts[b.address] || 0) - Math.abs(changeAmounts[a.address] || 0));
+                    break;
+            }
+            
+            grid.innerHTML = sortedSensors.map(sensor => {
+                const change = changeAmounts[sensor.address] || 0;
+                const absChange = Math.abs(change);
+                let cardClass = 'sensor-card';
+                if (absChange >= threshold * 2) {
+                    cardClass += ' changed-major';
+                } else if (absChange >= threshold) {
+                    cardClass += ' changed';
+                }
+                
+                let changeHtml = '';
+                if (absChange >= threshold * 0.5) {
+                    const arrow = change > 0 ? '↑' : '↓';
+                    const tempClass = change > 0 ? 'warming' : 'cooling';
+                    changeHtml = `<div class="change-indicator ${tempClass}">${arrow} ${absChange.toFixed(1)}°C</div>`;
+                }
+                
+                return `
+                <div class="${cardClass}" data-address="${sensor.address}">
                     <div class="sensor-name">${sensor.friendly_name || sensor.address}</div>
                     <div class="sensor-address">${sensor.address}</div>
                     <div class="sensor-temp">${sensor.valid ? sensor.temperature.toFixed(1) + '°C' : '--.-°C'}</div>
+                    ${changeHtml}
                     <input type="text" class="sensor-name-input" 
                            placeholder="Enter friendly name" 
                            value="${sensor.friendly_name || ''}"
@@ -233,7 +356,7 @@
                         Save Name
                     </button>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         async function saveName(address, name) {
