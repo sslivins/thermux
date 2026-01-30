@@ -179,9 +179,14 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
     }
 
     cJSON *name_json = cJSON_GetObjectItem(root, "friendly_name");
-    const char *friendly_name = cJSON_IsString(name_json) ? name_json->valuestring : NULL;
+    
+    /* Copy the name before deleting cJSON - the pointer becomes invalid after cJSON_Delete */
+    char friendly_name[64] = {0};
+    if (cJSON_IsString(name_json) && name_json->valuestring) {
+        strncpy(friendly_name, name_json->valuestring, sizeof(friendly_name) - 1);
+    }
 
-    ESP_LOGI("web_server", "Setting name for %s: '%s'", address, friendly_name ? friendly_name : "(null)");
+    ESP_LOGI("web_server", "Setting name for %s: '%s'", address, friendly_name);
 
     cJSON_Delete(root);
 
