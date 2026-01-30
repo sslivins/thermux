@@ -65,9 +65,14 @@
             border-radius: 8px;
             cursor: pointer;
             font-size: 1em;
-            transition: background 0.2s;
+            transition: background 0.2s, opacity 0.2s;
             margin-right: 10px;
             margin-top: 10px;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
         }
         .btn-primary { background: #3b82f6; color: white; }
         .btn-primary:hover { background: #2563eb; }
@@ -379,7 +384,6 @@
 
         async function installUpdate() {
             if (!updateAvailable || isUpdating) return;
-            if (!confirm('Install the latest firmware update?')) return;
             
             isUpdating = true;
             const checkBtn = document.getElementById('check-btn');
@@ -514,20 +518,26 @@
                 if (progress > 80) updateStatus.textContent = 'Finalizing...';
             }, 500);
             
+            /* Wait for device to go offline first, then wait for it to come back */
             setTimeout(() => {
                 clearInterval(progressInterval);
                 progressFill.style.width = '100%';
                 progressFill.textContent = '100%';
                 updateStatus.textContent = '✓ Update complete! Device restarting...';
                 updateStatus.className = 'update-status available';
-                setTimeout(() => { updateStatus.textContent = 'Waiting for device...'; waitForReboot(); }, 2000);
-            }, 12000);
+                waitForReboot();
+            }, 15000);
         }
 
         async function waitForReboot() {
             const updateStatus = document.getElementById('update-status');
             let attempts = 0;
-            const maxAttempts = 30;
+            const maxAttempts = 60;
+            
+            /* First wait for device to go offline */
+            updateStatus.textContent = 'Waiting for device to restart...';
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            
             const checkInterval = setInterval(async () => {
                 attempts++;
                 try {
@@ -536,9 +546,11 @@
                         clearInterval(checkInterval);
                         updateStatus.textContent = '✓ Device is back online! Refreshing...';
                         updateStatus.className = 'update-status available';
-                        setTimeout(() => location.reload(), 2000);
+                        setTimeout(() => location.reload(), 1000);
+                        return;
                     }
-                } catch (e) { updateStatus.textContent = 'Waiting for device... (' + attempts + '/' + maxAttempts + ')'; }
+                } catch (e) { /* Device still rebooting */ }
+                updateStatus.textContent = 'Waiting for device... (' + attempts + '/' + maxAttempts + ')';
                 if (attempts >= maxAttempts) {
                     clearInterval(checkInterval);
                     updateStatus.textContent = 'Device may have restarted. Please refresh manually.';

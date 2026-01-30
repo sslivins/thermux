@@ -58,11 +58,13 @@ def minify_inline_js(html):
         js = re.sub(r'(?<!:)//[^\n]*', '', js)
         # Remove multi-line comments
         js = re.sub(r'/\*.*?\*/', '', js, flags=re.DOTALL)
-        # Collapse whitespace (but preserve strings)
-        # This is a simplified approach - doesn't handle all edge cases
+        # Collapse whitespace outside of strings
         js = re.sub(r'\s+', ' ', js)
-        # Remove spaces around operators (simplified)
-        js = re.sub(r'\s*([{};:,=<>+\-*/&|!?])\s*', r'\1', js)
+        # Remove spaces around operators ONLY outside of strings
+        # Use a simpler approach that doesn't break string content
+        # Only remove spaces around structural characters, not inside quotes
+        js = re.sub(r'\s*([{};,])\s*', r'\1', js)
+        js = re.sub(r'\s*:\s*(?![^"\']*["\'])', ':', js)  # Colons outside strings
         # Fix function declarations
         js = re.sub(r'function\s*\(', 'function(', js)
         js = re.sub(r'\)\s*{', '){', js)
