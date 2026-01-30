@@ -36,7 +36,7 @@ EventGroupHandle_t network_event_group;
 const int NETWORK_CONNECTED_BIT = BIT0;
 
 /* Application version - update for each release */
-const char *APP_VERSION = "1.0.12";
+const char *APP_VERSION = "1.0.13";
 
 /* Runtime sensor settings (can be changed via web UI) */
 static uint32_t s_read_interval_ms = CONFIG_SENSOR_READ_INTERVAL_MS;

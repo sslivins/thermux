@@ -39,6 +39,7 @@ idf_component_register(
         "nvs_storage.c"
         "sensor_manager.c"
         "log_buffer.c"
+        "version_utils.c"
     INCLUDE_DIRS "."
     REQUIRES 
         nvs_flash

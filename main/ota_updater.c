@@ -7,6 +7,7 @@
  */
 
 #include "ota_updater.h"
+#include "version_utils.h"
 #include "esp_log.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
@@ -30,27 +31,6 @@ extern const char *APP_VERSION;
 static char s_latest_version[32] = {0};
 static char s_download_url[512] = {0};
 static bool s_update_available = false;
-
-/**
- * @brief Compare version strings (semantic versioning)
- * @return positive if v1 > v2, negative if v1 < v2, 0 if equal
- */
-static int compare_versions(const char *v1, const char *v2)
-{
-    int major1 = 0, minor1 = 0, patch1 = 0;
-    int major2 = 0, minor2 = 0, patch2 = 0;
-    
-    /* Skip 'v' prefix if present */
-    if (v1[0] == 'v' || v1[0] == 'V') v1++;
-    if (v2[0] == 'v' || v2[0] == 'V') v2++;
-    
-    sscanf(v1, "%d.%d.%d", &major1, &minor1, &patch1);
-    sscanf(v2, "%d.%d.%d", &major2, &minor2, &patch2);
-    
-    if (major1 != major2) return major1 - major2;
-    if (minor1 != minor2) return minor1 - minor2;
-    return patch1 - patch2;
-}
 
 /**
  * @brief HTTP event handler for GitHub API request
@@ -160,7 +140,7 @@ esp_err_t ota_check_for_update(void)
                     ESP_LOGI(TAG, "Latest version: %s", s_latest_version);
                     
                     /* Compare versions */
-                    if (compare_versions(s_latest_version, APP_VERSION) > 0) {
+                    if (version_compare(s_latest_version, APP_VERSION) > 0) {
                         s_update_available = true;
                         ESP_LOGI(TAG, "Update available: %s -> %s", APP_VERSION, s_latest_version);
                         

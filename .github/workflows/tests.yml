@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure CMake
+      run: |
+        cd test
+        cmake -B build -DCMAKE_BUILD_TYPE=Debug
+    
+    - name: Build tests
+      run: |
+        cd test
+        cmake --build build
+    
+    - name: Run tests
+      run: |
+        cd test/build
+        ctest --output-on-failure
