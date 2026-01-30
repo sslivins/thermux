@@ -26,684 +26,13 @@ extern esp_err_t mqtt_ha_stop(void);
 extern esp_err_t mqtt_ha_init(void);
 extern esp_err_t mqtt_ha_start(void);
 
-/* Embedded HTML page */
-static const char INDEX_HTML[] = R"rawliteral(
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Temperature Monitor</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #fff;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container { max-width: 1200px; margin: 0 auto; }
-        h1 { 
-            text-align: center; 
-            margin-bottom: 10px;
-            font-size: 2em;
-        }
-        .version { 
-            text-align: center; 
-            color: #888; 
-            margin-bottom: 30px;
-            font-size: 0.9em;
-        }
-        .status-bar {
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-            margin-bottom: 30px;
-            flex-wrap: wrap;
-        }
-        .status-item {
-            background: rgba(255,255,255,0.1);
-            padding: 10px 20px;
-            border-radius: 20px;
-            font-size: 0.9em;
-        }
-        .status-online { color: #4ade80; }
-        .status-offline { color: #f87171; }
-        .sensors-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-        }
-        .sensor-card {
-            background: rgba(255,255,255,0.05);
-            border-radius: 15px;
-            padding: 20px;
-            border: 1px solid rgba(255,255,255,0.1);
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .sensor-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        }
-        .sensor-temp {
-            font-size: 3em;
-            font-weight: 300;
-            color: #60a5fa;
-            margin: 10px 0;
-        }
-        .sensor-name {
-            font-size: 1.2em;
-            margin-bottom: 5px;
-        }
-        .sensor-address {
-            font-size: 0.8em;
-            color: #888;
-            font-family: monospace;
-        }
-        .sensor-name-input {
-            width: 100%;
-            padding: 8px 12px;
-            border: 1px solid rgba(255,255,255,0.2);
-            border-radius: 8px;
-            background: rgba(255,255,255,0.1);
-            color: #fff;
-            font-size: 1em;
-            margin-top: 15px;
-        }
-        .sensor-name-input:focus {
-            outline: none;
-            border-color: #60a5fa;
-        }
-        .btn {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 0.9em;
-            transition: background 0.2s;
-            margin-top: 10px;
-        }
-        .btn-primary {
-            background: #3b82f6;
-            color: white;
-        }
-        .btn-primary:hover { background: #2563eb; }
-        .btn-secondary {
-            background: rgba(255,255,255,0.1);
-            color: white;
-        }
-        .btn-secondary:hover { background: rgba(255,255,255,0.2); }
-        .actions {
-            text-align: center;
-            margin-top: 30px;
-        }
-        .toast {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background: #22c55e;
-            color: white;
-            padding: 12px 24px;
-            border-radius: 8px;
-            opacity: 0;
-            transition: opacity 0.3s;
-        }
-        .toast.show { opacity: 1; }
-        .toast.error { background: #ef4444; }
-        .loading { opacity: 0.5; }
-        @media (max-width: 600px) {
-            .sensor-temp { font-size: 2.5em; }
-            h1 { font-size: 1.5em; }
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🌡️ Temperature Monitor</h1>
-        <div class="version" id="version">Version loading...</div>
-        
-        <div class="status-bar">
-            <div class="status-item">
-                <span id="sensor-count">0</span> Sensors
-            </div>
-            <div class="status-item">
-                MQTT: <span id="mqtt-status" class="status-offline">Offline</span>
-            </div>
-            <div class="status-item">
-                Last Update: <span id="last-update">-</span>
-            </div>
-        </div>
-
-        <div class="sensors-grid" id="sensors-grid">
-            <div class="sensor-card loading">Loading sensors...</div>
-        </div>
-
-        <div class="actions">
-            <button class="btn btn-secondary" onclick="rescanSensors()">🔄 Rescan Sensors</button>
-            <button class="btn btn-secondary" onclick="checkOTA()">📦 Check for Updates</button>
-            <button class="btn btn-secondary" onclick="location.href='/config'">⚙️ Settings</button>
-        </div>
-    </div>
-
-    <div class="toast" id="toast"></div>
-
-    <script>
-        let sensors = [];
-        let updateInterval;
-        let isEditing = false;  // Track if user is editing an input
-
-        async function fetchSensors() {
-            // Skip update if user is editing a field
-            if (isEditing) return;
-            
-            try {
-                const response = await fetch('/api/sensors');
-                sensors = await response.json();
-                renderSensors();
-                document.getElementById('sensor-count').textContent = sensors.length;
-                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
-            } catch (err) {
-                showToast('Failed to fetch sensors', true);
-            }
-        }
-
-        async function fetchStatus() {
-            try {
-                const response = await fetch('/api/status');
-                const status = await response.json();
-                document.getElementById('version').textContent = 'Version ' + status.version;
-                document.getElementById('mqtt-status').textContent = status.mqtt_connected ? 'Online' : 'Offline';
-                document.getElementById('mqtt-status').className = status.mqtt_connected ? 'status-online' : 'status-offline';
-            } catch (err) {
-                console.error('Failed to fetch status');
-            }
-        }
-
-        function renderSensors() {
-            const grid = document.getElementById('sensors-grid');
-            if (sensors.length === 0) {
-                grid.innerHTML = '<div class="sensor-card">No sensors found. Click "Rescan Sensors" to detect connected sensors.</div>';
-                return;
-            }
-            
-            grid.innerHTML = sensors.map(sensor => `
-                <div class="sensor-card" data-address="${sensor.address}">
-                    <div class="sensor-name">${sensor.friendly_name || sensor.address}</div>
-                    <div class="sensor-address">${sensor.address}</div>
-                    <div class="sensor-temp">${sensor.valid ? sensor.temperature.toFixed(1) + '°C' : '--.-°C'}</div>
-                    <input type="text" class="sensor-name-input" 
-                           placeholder="Enter friendly name" 
-                           value="${sensor.friendly_name || ''}"
-                           onfocus="isEditing = true"
-                           onblur="isEditing = false"
-                           onkeypress="if(event.key==='Enter') saveName('${sensor.address}', this.value)">
-                    <button class="btn btn-primary" onclick="saveName('${sensor.address}', this.previousElementSibling.value)">
-                        Save Name
-                    </button>
-                </div>
-            `).join('');
-        }
-
-        async function saveName(address, name) {
-            try {
-                const response = await fetch('/api/sensors/' + address + '/name', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ friendly_name: name })
-                });
-                if (response.ok) {
-                    showToast('Name saved successfully');
-                    fetchSensors();
-                } else {
-                    showToast('Failed to save name', true);
-                }
-            } catch (err) {
-                showToast('Error saving name', true);
-            }
-        }
-
-        async function rescanSensors() {
-            try {
-                showToast('Scanning for sensors...');
-                const response = await fetch('/api/sensors/rescan', { method: 'POST' });
-                if (response.ok) {
-                    showToast('Scan complete');
-                    fetchSensors();
-                } else {
-                    showToast('Scan failed', true);
-                }
-            } catch (err) {
-                showToast('Error during scan', true);
-            }
-        }
-
-        async function checkOTA() {
-            try {
-                showToast('Checking for updates...');
-                const response = await fetch('/api/ota/check', { method: 'POST' });
-                const result = await response.json();
-                if (result.update_available) {
-                    if (confirm('Update available: ' + result.latest_version + '. Install now?')) {
-                        fetch('/api/ota/update', { method: 'POST' });
-                        showToast('Update started. Device will restart.');
-                    }
-                } else {
-                    showToast('Already up to date: ' + result.current_version);
-                }
-            } catch (err) {
-                showToast('Error checking for updates', true);
-            }
-        }
-
-        function showToast(message, isError = false) {
-            const toast = document.getElementById('toast');
-            toast.textContent = message;
-            toast.className = 'toast show' + (isError ? ' error' : '');
-            setTimeout(() => toast.className = 'toast', 3000);
-        }
-
-        // Initial load
-        fetchStatus();
-        fetchSensors();
-        
-        // Auto-refresh every 5 seconds
-        updateInterval = setInterval(fetchSensors, 5000);
-    </script>
-</body>
-</html>
-)rawliteral";
-
-/* Configuration page HTML */
-static const char CONFIG_HTML[] = R"rawliteral(
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Settings</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #fff;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container { max-width: 800px; margin: 0 auto; }
-        h1 { text-align: center; margin-bottom: 10px; font-size: 2em; }
-        .back-link { text-align: center; margin-bottom: 30px; }
-        .back-link a { color: #60a5fa; text-decoration: none; }
-        .back-link a:hover { text-decoration: underline; }
-        .config-section {
-            background: rgba(255,255,255,0.05);
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 20px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        .section-title {
-            font-size: 1.3em;
-            margin-bottom: 20px;
-            color: #60a5fa;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .form-group {
-            margin-bottom: 15px;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            color: #ccc;
-            font-size: 0.9em;
-        }
-        .form-group input {
-            width: 100%;
-            padding: 12px 15px;
-            border: 1px solid rgba(255,255,255,0.2);
-            border-radius: 8px;
-            background: rgba(255,255,255,0.1);
-            color: #fff;
-            font-size: 1em;
-        }
-        .form-group input:focus {
-            outline: none;
-            border-color: #60a5fa;
-        }
-        .form-group input::placeholder { color: #666; }
-        .form-hint {
-            font-size: 0.8em;
-            color: #888;
-            margin-top: 5px;
-        }
-        .btn {
-            padding: 12px 24px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 1em;
-            transition: background 0.2s;
-            margin-right: 10px;
-            margin-top: 10px;
-        }
-        .btn-primary { background: #3b82f6; color: white; }
-        .btn-primary:hover { background: #2563eb; }
-        .btn-danger { background: #ef4444; color: white; }
-        .btn-danger:hover { background: #dc2626; }
-        .btn-secondary { background: rgba(255,255,255,0.1); color: white; }
-        .btn-secondary:hover { background: rgba(255,255,255,0.2); }
-        .status-badge {
-            display: inline-block;
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-size: 0.8em;
-            margin-left: 10px;
-        }
-        .status-connected { background: #22c55e; }
-        .status-disconnected { background: #ef4444; }
-        .toast {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background: #22c55e;
-            color: white;
-            padding: 12px 24px;
-            border-radius: 8px;
-            opacity: 0;
-            transition: opacity 0.3s;
-            z-index: 1000;
-        }
-        .toast.show { opacity: 1; }
-        .toast.error { background: #ef4444; }
-        .current-value {
-            font-size: 0.85em;
-            color: #888;
-            margin-bottom: 8px;
-        }
-        .danger-zone {
-            border-color: #ef4444;
-        }
-        .danger-zone .section-title { color: #ef4444; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>⚙️ Settings</h1>
-        <div class="back-link"><a href="/">← Back to Dashboard</a></div>
-
-        <!-- WiFi Configuration -->
-        <div class="config-section">
-            <div class="section-title">📶 WiFi Configuration</div>
-            <form id="wifi-form">
-                <div class="form-group">
-                    <label for="wifi-ssid">Network Name (SSID)</label>
-                    <div class="current-value" id="wifi-ssid-current">Current: Loading...</div>
-                    <input type="text" id="wifi-ssid" name="ssid" placeholder="Enter WiFi network name" maxlength="31">
-                </div>
-                <div class="form-group">
-                    <label for="wifi-password">Password</label>
-                    <input type="password" id="wifi-password" name="password" placeholder="Enter WiFi password" maxlength="63">
-                    <div class="form-hint">Leave blank to keep current password</div>
-                </div>
-                <button type="submit" class="btn btn-primary">💾 Save WiFi Settings</button>
-            </form>
-        </div>
-
-        <!-- MQTT Configuration -->
-        <div class="config-section">
-            <div class="section-title">
-                🔗 MQTT Configuration
-                <span id="mqtt-status" class="status-badge status-disconnected">Disconnected</span>
-            </div>
-            <form id="mqtt-form">
-                <div class="form-group">
-                    <label for="mqtt-uri">Broker URI</label>
-                    <div class="current-value" id="mqtt-uri-current">Current: Loading...</div>
-                    <input type="text" id="mqtt-uri" name="uri" placeholder="mqtt://192.168.1.100:1883">
-                    <div class="form-hint">Example: mqtt://host:1883 or mqtts://host:8883 for TLS</div>
-                </div>
-                <div class="form-group">
-                    <label for="mqtt-username">Username (optional)</label>
-                    <div class="current-value" id="mqtt-user-current">Current: Loading...</div>
-                    <input type="text" id="mqtt-username" name="username" placeholder="MQTT username">
-                </div>
-                <div class="form-group">
-                    <label for="mqtt-password">Password (optional)</label>
-                    <input type="password" id="mqtt-password" name="password" placeholder="MQTT password">
-                    <div class="form-hint">Leave blank to keep current password</div>
-                </div>
-                <button type="submit" class="btn btn-primary">💾 Save MQTT Settings</button>
-                <button type="button" class="btn btn-secondary" onclick="reconnectMqtt()">🔄 Reconnect</button>
-            </form>
-        </div>
-
-        <!-- Sensor Configuration -->
-        <div class="config-section">
-            <div class="section-title">🌡️ Sensor Configuration</div>
-            <form id="sensor-form">
-                <div class="form-group">
-                    <label for="read-interval">Read Interval (seconds)</label>
-                    <div class="current-value" id="read-interval-current">Current: Loading...</div>
-                    <input type="number" id="read-interval" name="read_interval" min="1" max="300" placeholder="10">
-                    <div class="form-hint">How often to read temperature from sensors (1-300 seconds)</div>
-                </div>
-                <div class="form-group">
-                    <label for="publish-interval">MQTT Publish Interval (seconds)</label>
-                    <div class="current-value" id="publish-interval-current">Current: Loading...</div>
-                    <input type="number" id="publish-interval" name="publish_interval" min="5" max="600" placeholder="10">
-                    <div class="form-hint">How often to send readings to Home Assistant (5-600 seconds)</div>
-                </div>
-                <div class="form-group">
-                    <label for="resolution">Sensor Resolution</label>
-                    <div class="current-value" id="resolution-current">Current: Loading...</div>
-                    <select id="resolution" name="resolution">
-                        <option value="9">9-bit (0.5°C, ~94ms)</option>
-                        <option value="10">10-bit (0.25°C, ~188ms)</option>
-                        <option value="11">11-bit (0.125°C, ~375ms)</option>
-                        <option value="12">12-bit (0.0625°C, ~750ms)</option>
-                    </select>
-                    <div class="form-hint">Higher resolution = more precision but slower readings</div>
-                </div>
-                <button type="submit" class="btn btn-primary">💾 Save Sensor Settings</button>
-            </form>
-        </div>
-
-        <!-- System Actions -->
-        <div class="config-section danger-zone">
-            <div class="section-title">⚠️ System</div>
-            <p style="margin-bottom: 15px; color: #ccc;">Device restart is required after changing WiFi settings.</p>
-            <button class="btn btn-secondary" onclick="restartDevice()">🔄 Restart Device</button>
-            <button class="btn btn-danger" onclick="factoryReset()">🗑️ Factory Reset</button>
-        </div>
-    </div>
-
-    <div class="toast" id="toast"></div>
-
-    <script>
-        async function loadConfig() {
-            try {
-                // Load WiFi config
-                const wifiResp = await fetch('/api/config/wifi');
-                const wifi = await wifiResp.json();
-                document.getElementById('wifi-ssid-current').textContent = 'Current: ' + (wifi.ssid || 'Not set');
-                document.getElementById('wifi-ssid').placeholder = wifi.ssid || 'Enter WiFi network name';
-
-                // Load MQTT config
-                const mqttResp = await fetch('/api/config/mqtt');
-                const mqtt = await mqttResp.json();
-                document.getElementById('mqtt-uri-current').textContent = 'Current: ' + (mqtt.uri || 'Not set');
-                document.getElementById('mqtt-user-current').textContent = 'Current: ' + (mqtt.username || 'None');
-                document.getElementById('mqtt-uri').placeholder = mqtt.uri || 'mqtt://host:1883';
-                document.getElementById('mqtt-username').placeholder = mqtt.username || 'Username';
-                
-                // Update MQTT status
-                const statusResp = await fetch('/api/status');
-                const status = await statusResp.json();
-                const mqttBadge = document.getElementById('mqtt-status');
-                mqttBadge.textContent = status.mqtt_connected ? 'Connected' : 'Disconnected';
-                mqttBadge.className = 'status-badge ' + (status.mqtt_connected ? 'status-connected' : 'status-disconnected');
-
-                // Load Sensor config
-                const sensorResp = await fetch('/api/config/sensor');
-                const sensor = await sensorResp.json();
-                document.getElementById('read-interval-current').textContent = 'Current: ' + (sensor.read_interval / 1000) + ' seconds';
-                document.getElementById('publish-interval-current').textContent = 'Current: ' + (sensor.publish_interval / 1000) + ' seconds';
-                document.getElementById('resolution-current').textContent = 'Current: ' + sensor.resolution + '-bit';
-                document.getElementById('read-interval').value = sensor.read_interval / 1000;
-                document.getElementById('publish-interval').value = sensor.publish_interval / 1000;
-                document.getElementById('resolution').value = sensor.resolution;
-            } catch (err) {
-                showToast('Failed to load configuration', true);
-            }
-        }
-
-        document.getElementById('wifi-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const ssid = document.getElementById('wifi-ssid').value;
-            const password = document.getElementById('wifi-password').value;
-            
-            if (!ssid) {
-                showToast('Please enter WiFi SSID', true);
-                return;
-            }
-            
-            try {
-                const resp = await fetch('/api/config/wifi', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ssid, password })
-                });
-                if (resp.ok) {
-                    showToast('WiFi settings saved. Restart to apply.');
-                    loadConfig();
-                } else {
-                    showToast('Failed to save WiFi settings', true);
-                }
-            } catch (err) {
-                showToast('Error saving WiFi settings', true);
-            }
-        });
-
-        document.getElementById('mqtt-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const uri = document.getElementById('mqtt-uri').value;
-            const username = document.getElementById('mqtt-username').value;
-            const password = document.getElementById('mqtt-password').value;
-            
-            if (!uri) {
-                showToast('Please enter MQTT broker URI', true);
-                return;
-            }
-            
-            try {
-                const resp = await fetch('/api/config/mqtt', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ uri, username, password })
-                });
-                if (resp.ok) {
-                    showToast('MQTT settings saved');
-                    loadConfig();
-                } else {
-                    showToast('Failed to save MQTT settings', true);
-                }
-            } catch (err) {
-                showToast('Error saving MQTT settings', true);
-            }
-        });
-
-        async function reconnectMqtt() {
-            try {
-                showToast('Reconnecting MQTT...');
-                const resp = await fetch('/api/mqtt/reconnect', { method: 'POST' });
-                if (resp.ok) {
-                    showToast('MQTT reconnecting...');
-                    setTimeout(loadConfig, 3000);
-                } else {
-                    showToast('Failed to reconnect', true);
-                }
-            } catch (err) {
-                showToast('Error reconnecting MQTT', true);
-            }
-        }
-
-        async function restartDevice() {
-            if (!confirm('Are you sure you want to restart the device?')) return;
-            try {
-                await fetch('/api/system/restart', { method: 'POST' });
-                showToast('Device restarting...');
-            } catch (err) {
-                showToast('Restart command sent');
-            }
-        }
-
-        async function factoryReset() {
-            if (!confirm('⚠️ This will erase ALL settings including sensor names!\n\nAre you sure?')) return;
-            if (!confirm('Last chance! This cannot be undone. Continue?')) return;
-            try {
-                const resp = await fetch('/api/system/factory-reset', { method: 'POST' });
-                if (resp.ok) {
-                    showToast('Factory reset complete. Restarting...');
-                } else {
-                    showToast('Factory reset failed', true);
-                }
-            } catch (err) {
-                showToast('Factory reset initiated');
-            }
-        }
-
-        document.getElementById('sensor-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const readInterval = parseInt(document.getElementById('read-interval').value) * 1000;
-            const publishInterval = parseInt(document.getElementById('publish-interval').value) * 1000;
-            const resolution = parseInt(document.getElementById('resolution').value);
-            
-            if (readInterval < 1000 || readInterval > 300000) {
-                showToast('Read interval must be 1-300 seconds', true);
-                return;
-            }
-            if (publishInterval < 5000 || publishInterval > 600000) {
-                showToast('Publish interval must be 5-600 seconds', true);
-                return;
-            }
-            
-            try {
-                const resp = await fetch('/api/config/sensor', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        read_interval: readInterval, 
-                        publish_interval: publishInterval,
-                        resolution: resolution
-                    })
-                });
-                if (resp.ok) {
-                    showToast('Sensor settings saved');
-                    loadConfig();
-                } else {
-                    showToast('Failed to save sensor settings', true);
-                }
-            } catch (err) {
-                showToast('Error saving sensor settings', true);
-            }
-        });
-
-        function showToast(message, isError = false) {
-            const toast = document.getElementById('toast');
-            toast.textContent = message;
-            toast.className = 'toast show' + (isError ? ' error' : '');
-            setTimeout(() => toast.className = 'toast', 3000);
-        }
-
-        // Load config on page load
-        loadConfig();
-    </script>
-</body>
-</html>
-)rawliteral";
+/* Embedded HTML files (minified at build time) */
+extern const uint8_t index_html_start[] asm("_binary_index_html_start");
+extern const uint8_t index_html_end[] asm("_binary_index_html_end");
+extern const uint8_t config_html_start[] asm("_binary_config_html_start");
+extern const uint8_t config_html_end[] asm("_binary_config_html_end");
+extern const uint8_t ota_html_start[] asm("_binary_ota_html_start");
+extern const uint8_t ota_html_end[] asm("_binary_ota_html_end");
 
 /**
  * @brief Handler for GET /
@@ -711,9 +40,11 @@ static const char CONFIG_HTML[] = R"rawliteral(
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, INDEX_HTML, strlen(INDEX_HTML));
+    httpd_resp_send(req, (const char *)index_html_start, index_html_end - index_html_start);
     return ESP_OK;
 }
+
+/* Note: HTML content moved to external files in main/html/ directory */
 
 /**
  * @brief Handler for GET /api/status
@@ -834,21 +165,21 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
 
     /* Parse JSON */
     cJSON *root = cJSON_Parse(content);
-    if (root == NULL) {
+    if (!root) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
         return ESP_FAIL;
     }
 
-    cJSON *name_item = cJSON_GetObjectItem(root, "friendly_name");
-    if (!cJSON_IsString(name_item)) {
-        cJSON_Delete(root);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing friendly_name");
-        return ESP_FAIL;
-    }
+    cJSON *name_json = cJSON_GetObjectItem(root, "friendly_name");
+    const char *friendly_name = cJSON_IsString(name_json) ? name_json->valuestring : NULL;
 
-    esp_err_t err = sensor_manager_set_friendly_name(address, name_item->valuestring);
+    ESP_LOGI("web_server", "Setting name for %s: '%s'", address, friendly_name ? friendly_name : "(null)");
+
     cJSON_Delete(root);
 
+    /* Update sensor with new name */
+    esp_err_t err = sensor_manager_set_friendly_name(address, friendly_name);
+    
     if (err != ESP_OK) {
         ESP_LOGE("web_server", "Failed to set friendly name: %s", esp_err_to_name(err));
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Sensor not found");
@@ -865,6 +196,26 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
     httpd_resp_send(req, json, strlen(json));
     free(json);
     
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for GET /config
+ */
+static esp_err_t config_get_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, (const char *)config_html_start, config_html_end - config_html_start);
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for GET /ota
+ */
+static esp_err_t ota_page_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, (const char *)ota_html_start, ota_html_end - ota_html_start);
     return ESP_OK;
 }
 
@@ -946,16 +297,6 @@ static esp_err_t api_ota_update_handler(httpd_req_t *req)
     free(json);
 #endif
     
-    return ESP_OK;
-}
-
-/**
- * @brief Handler for GET /config
- */
-static esp_err_t config_get_handler(httpd_req_t *req)
-{
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, CONFIG_HTML, strlen(CONFIG_HTML));
     return ESP_OK;
 }
 
@@ -1401,6 +742,14 @@ esp_err_t web_server_start(void)
         .handler = config_get_handler,
     };
     httpd_register_uri_handler(s_server, &config_uri);
+
+    /* OTA Update page */
+    httpd_uri_t ota_page_uri = {
+        .uri = "/ota",
+        .method = HTTP_GET,
+        .handler = ota_page_handler,
+    };
+    httpd_register_uri_handler(s_server, &ota_page_uri);
 
     /* WiFi config endpoints */
     httpd_uri_t wifi_config_get_uri = {

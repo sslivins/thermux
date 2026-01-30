@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 10px; font-size: 2em; }
+        .back-link { text-align: center; margin-bottom: 30px; }
+        .back-link a { color: #60a5fa; text-decoration: none; }
+        .back-link a:hover { text-decoration: underline; }
+        .config-section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .section-title {
+            font-size: 1.3em;
+            margin-bottom: 20px;
+            color: #60a5fa;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .form-group { margin-bottom: 15px; }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #ccc;
+            font-size: 0.9em;
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            font-size: 1em;
+        }
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #60a5fa;
+        }
+        .form-group input::placeholder { color: #666; }
+        .form-hint { font-size: 0.8em; color: #888; margin-top: 5px; }
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background 0.2s;
+            margin-right: 10px;
+            margin-top: 10px;
+        }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-secondary { background: rgba(255,255,255,0.1); color: white; }
+        .btn-secondary:hover { background: rgba(255,255,255,0.2); }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            margin-left: 10px;
+        }
+        .status-connected { background: #22c55e; }
+        .status-disconnected { background: #ef4444; }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #22c55e;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            z-index: 1000;
+        }
+        .toast.show { opacity: 1; }
+        .toast.error { background: #ef4444; }
+        .current-value { font-size: 0.85em; color: #888; margin-bottom: 8px; }
+        .danger-zone { border-color: #ef4444; }
+        .danger-zone .section-title { color: #ef4444; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚙️ Settings</h1>
+        <div class="back-link"><a href="/">← Back to Dashboard</a></div>
+
+        <div class="config-section">
+            <div class="section-title">📶 WiFi Configuration</div>
+            <form id="wifi-form">
+                <div class="form-group">
+                    <label for="wifi-ssid">Network Name (SSID)</label>
+                    <div class="current-value" id="wifi-ssid-current">Current: Loading...</div>
+                    <input type="text" id="wifi-ssid" name="ssid" placeholder="Enter WiFi network name" maxlength="31">
+                </div>
+                <div class="form-group">
+                    <label for="wifi-password">Password</label>
+                    <input type="password" id="wifi-password" name="password" placeholder="Enter WiFi password" maxlength="63">
+                    <div class="form-hint">Leave blank to keep current password</div>
+                </div>
+                <button type="submit" class="btn btn-primary">💾 Save WiFi Settings</button>
+            </form>
+        </div>
+
+        <div class="config-section">
+            <div class="section-title">
+                🔗 MQTT Configuration
+                <span id="mqtt-status" class="status-badge status-disconnected">Disconnected</span>
+            </div>
+            <form id="mqtt-form">
+                <div class="form-group">
+                    <label for="mqtt-uri">Broker URI</label>
+                    <div class="current-value" id="mqtt-uri-current">Current: Loading...</div>
+                    <input type="text" id="mqtt-uri" name="uri" placeholder="mqtt://192.168.1.100:1883">
+                    <div class="form-hint">Example: mqtt://host:1883 or mqtts://host:8883 for TLS</div>
+                </div>
+                <div class="form-group">
+                    <label for="mqtt-username">Username (optional)</label>
+                    <div class="current-value" id="mqtt-user-current">Current: Loading...</div>
+                    <input type="text" id="mqtt-username" name="username" placeholder="MQTT username">
+                </div>
+                <div class="form-group">
+                    <label for="mqtt-password">Password (optional)</label>
+                    <input type="password" id="mqtt-password" name="password" placeholder="MQTT password">
+                    <div class="form-hint">Leave blank to keep current password</div>
+                </div>
+                <button type="submit" class="btn btn-primary">💾 Save MQTT Settings</button>
+                <button type="button" class="btn btn-secondary" onclick="reconnectMqtt()">🔄 Reconnect</button>
+            </form>
+        </div>
+
+        <div class="config-section">
+            <div class="section-title">🌡️ Sensor Configuration</div>
+            <form id="sensor-form">
+                <div class="form-group">
+                    <label for="read-interval">Read Interval (seconds)</label>
+                    <div class="current-value" id="read-interval-current">Current: Loading...</div>
+                    <input type="number" id="read-interval" name="read_interval" min="1" max="300" placeholder="10">
+                    <div class="form-hint">How often to read temperature from sensors (1-300 seconds)</div>
+                </div>
+                <div class="form-group">
+                    <label for="publish-interval">MQTT Publish Interval (seconds)</label>
+                    <div class="current-value" id="publish-interval-current">Current: Loading...</div>
+                    <input type="number" id="publish-interval" name="publish_interval" min="5" max="600" placeholder="10">
+                    <div class="form-hint">How often to send readings to Home Assistant (5-600 seconds)</div>
+                </div>
+                <div class="form-group">
+                    <label for="resolution">Sensor Resolution</label>
+                    <div class="current-value" id="resolution-current">Current: Loading...</div>
+                    <select id="resolution" name="resolution">
+                        <option value="9">9-bit (0.5°C, ~94ms)</option>
+                        <option value="10">10-bit (0.25°C, ~188ms)</option>
+                        <option value="11">11-bit (0.125°C, ~375ms)</option>
+                        <option value="12">12-bit (0.0625°C, ~750ms)</option>
+                    </select>
+                    <div class="form-hint">Higher resolution = more precision but slower readings</div>
+                </div>
+                <button type="submit" class="btn btn-primary">💾 Save Sensor Settings</button>
+            </form>
+        </div>
+
+        <div class="config-section danger-zone">
+            <div class="section-title">⚠️ System</div>
+            <p style="margin-bottom: 15px; color: #ccc;">Device restart is required after changing WiFi settings.</p>
+            <button class="btn btn-secondary" onclick="restartDevice()">🔄 Restart Device</button>
+            <button class="btn btn-danger" onclick="factoryReset()">🗑️ Factory Reset</button>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        async function loadConfig() {
+            try {
+                const wifiResp = await fetch('/api/config/wifi');
+                const wifi = await wifiResp.json();
+                document.getElementById('wifi-ssid-current').textContent = 'Current: ' + (wifi.ssid || 'Not set');
+                document.getElementById('wifi-ssid').placeholder = wifi.ssid || 'Enter WiFi network name';
+
+                const mqttResp = await fetch('/api/config/mqtt');
+                const mqtt = await mqttResp.json();
+                document.getElementById('mqtt-uri-current').textContent = 'Current: ' + (mqtt.uri || 'Not set');
+                document.getElementById('mqtt-user-current').textContent = 'Current: ' + (mqtt.username || 'None');
+                document.getElementById('mqtt-uri').placeholder = mqtt.uri || 'mqtt://host:1883';
+                document.getElementById('mqtt-username').placeholder = mqtt.username || 'Username';
+                
+                const statusResp = await fetch('/api/status');
+                const status = await statusResp.json();
+                const mqttBadge = document.getElementById('mqtt-status');
+                mqttBadge.textContent = status.mqtt_connected ? 'Connected' : 'Disconnected';
+                mqttBadge.className = 'status-badge ' + (status.mqtt_connected ? 'status-connected' : 'status-disconnected');
+
+                const sensorResp = await fetch('/api/config/sensor');
+                const sensor = await sensorResp.json();
+                document.getElementById('read-interval-current').textContent = 'Current: ' + (sensor.read_interval / 1000) + ' seconds';
+                document.getElementById('publish-interval-current').textContent = 'Current: ' + (sensor.publish_interval / 1000) + ' seconds';
+                document.getElementById('resolution-current').textContent = 'Current: ' + sensor.resolution + '-bit';
+                document.getElementById('read-interval').value = sensor.read_interval / 1000;
+                document.getElementById('publish-interval').value = sensor.publish_interval / 1000;
+                document.getElementById('resolution').value = sensor.resolution;
+            } catch (err) {
+                showToast('Failed to load configuration', true);
+            }
+        }
+
+        document.getElementById('wifi-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const ssid = document.getElementById('wifi-ssid').value;
+            const password = document.getElementById('wifi-password').value;
+            if (!ssid) { showToast('Please enter WiFi SSID', true); return; }
+            try {
+                const resp = await fetch('/api/config/wifi', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ssid, password })
+                });
+                if (resp.ok) { showToast('WiFi settings saved. Restart to apply.'); loadConfig(); }
+                else { showToast('Failed to save WiFi settings', true); }
+            } catch (err) { showToast('Error saving WiFi settings', true); }
+        });
+
+        document.getElementById('mqtt-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const uri = document.getElementById('mqtt-uri').value;
+            const username = document.getElementById('mqtt-username').value;
+            const password = document.getElementById('mqtt-password').value;
+            if (!uri) { showToast('Please enter MQTT broker URI', true); return; }
+            try {
+                const resp = await fetch('/api/config/mqtt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ uri, username, password })
+                });
+                if (resp.ok) { showToast('MQTT settings saved'); loadConfig(); }
+                else { showToast('Failed to save MQTT settings', true); }
+            } catch (err) { showToast('Error saving MQTT settings', true); }
+        });
+
+        document.getElementById('sensor-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const readInterval = parseInt(document.getElementById('read-interval').value) * 1000;
+            const publishInterval = parseInt(document.getElementById('publish-interval').value) * 1000;
+            const resolution = parseInt(document.getElementById('resolution').value);
+            if (readInterval < 1000 || readInterval > 300000) { showToast('Read interval must be 1-300 seconds', true); return; }
+            if (publishInterval < 5000 || publishInterval > 600000) { showToast('Publish interval must be 5-600 seconds', true); return; }
+            try {
+                const resp = await fetch('/api/config/sensor', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ read_interval: readInterval, publish_interval: publishInterval, resolution: resolution })
+                });
+                if (resp.ok) { showToast('Sensor settings saved'); loadConfig(); }
+                else { showToast('Failed to save sensor settings', true); }
+            } catch (err) { showToast('Error saving sensor settings', true); }
+        });
+
+        async function reconnectMqtt() {
+            try {
+                showToast('Reconnecting MQTT...');
+                const resp = await fetch('/api/mqtt/reconnect', { method: 'POST' });
+                if (resp.ok) { showToast('MQTT reconnecting...'); setTimeout(loadConfig, 3000); }
+                else { showToast('Failed to reconnect', true); }
+            } catch (err) { showToast('Error reconnecting MQTT', true); }
+        }
+
+        async function restartDevice() {
+            if (!confirm('Are you sure you want to restart the device?')) return;
+            try { await fetch('/api/system/restart', { method: 'POST' }); showToast('Device restarting...'); }
+            catch (err) { showToast('Restart command sent'); }
+        }
+
+        async function factoryReset() {
+            if (!confirm('⚠️ This will erase ALL settings including sensor names!\n\nAre you sure?')) return;
+            if (!confirm('Last chance! This cannot be undone. Continue?')) return;
+            try {
+                const resp = await fetch('/api/system/factory-reset', { method: 'POST' });
+                if (resp.ok) { showToast('Factory reset complete. Restarting...'); }
+                else { showToast('Factory reset failed', true); }
+            } catch (err) { showToast('Factory reset initiated'); }
+        }
+
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast show' + (isError ? ' error' : '');
+            setTimeout(() => toast.className = 'toast', 3000);
+        }
+
+        loadConfig();
+    </script>
+</body>
+</html>

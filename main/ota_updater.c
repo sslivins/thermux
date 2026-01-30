@@ -11,6 +11,7 @@
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
 #include "esp_ota_ops.h"
+#include "esp_crt_bundle.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -27,12 +28,8 @@ extern const char *APP_VERSION;
 #define GITHUB_API_BUFFER_SIZE 4096
 
 static char s_latest_version[32] = {0};
-static char s_download_url[256] = {0};
+static char s_download_url[512] = {0};
 static bool s_update_available = false;
-
-/* Root CA for GitHub - you may need to update this */
-extern const uint8_t github_root_ca_pem_start[] asm("_binary_github_root_ca_pem_start");
-extern const uint8_t github_root_ca_pem_end[] asm("_binary_github_root_ca_pem_end");
 
 /**
  * @brief Compare version strings (semantic versioning)
@@ -138,8 +135,7 @@ esp_err_t ota_check_for_update(void)
         .event_handler = http_event_handler,
         .user_data = &response_buffer,
         .timeout_ms = 10000,
-        /* Note: In production, add .cert_pem = (char *)github_root_ca_pem_start */
-        .skip_cert_common_name_check = true,  /* For testing only */
+        .crt_bundle_attach = esp_crt_bundle_attach,
     };
     
     /* Add User-Agent header (required by GitHub API) */
@@ -235,11 +231,16 @@ static void ota_update_task(void *pvParameters)
     esp_http_client_config_t config = {
         .url = s_download_url,
         .timeout_ms = 60000,
-        .skip_cert_common_name_check = true,  /* For testing - add proper cert in production */
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .buffer_size = 1024,
+        .buffer_size_tx = 1024,
+        .keep_alive_enable = true,
     };
     
     esp_https_ota_config_t ota_config = {
         .http_config = &config,
+        .partial_http_download = true,
+        .max_http_request_size = 64 * 1024,
     };
     
     esp_err_t err = esp_https_ota(&ota_config);

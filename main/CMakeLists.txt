@@ -1,3 +1,32 @@
+# Minify HTML files at build time
+set(HTML_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/html")
+set(HTML_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/html_min")
+
+# Create minified output directory
+file(MAKE_DIRECTORY ${HTML_BUILD_DIR})
+
+# Find Python
+find_package(Python3 REQUIRED)
+
+# Execute minification script during configuration
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/minify_html.py" 
+            "${HTML_SRC_DIR}" "${HTML_BUILD_DIR}"
+    RESULT_VARIABLE MINIFY_RESULT
+    OUTPUT_VARIABLE MINIFY_OUTPUT
+    ERROR_VARIABLE MINIFY_ERROR
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+if(NOT MINIFY_RESULT EQUAL 0)
+    message(WARNING "HTML minification failed: ${MINIFY_ERROR}")
+    # Fall back to using unminified files directly
+    set(HTML_BUILD_DIR ${HTML_SRC_DIR})
+else()
+    message(STATUS "HTML minification:")
+    message(STATUS "${MINIFY_OUTPUT}")
+endif()
+
 idf_component_register(
     SRCS 
         "main.c"
@@ -25,4 +54,7 @@ idf_component_register(
         driver
     EMBED_TXTFILES
         "certs/github_root_ca.pem"
+        "${HTML_BUILD_DIR}/index.html"
+        "${HTML_BUILD_DIR}/config.html"
+        "${HTML_BUILD_DIR}/ota.html"
 )

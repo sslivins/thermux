@@ -3,3 +3,4 @@
 /dependencies.lock
 sdkconfig.old
 .clangd
+main/html_min/
