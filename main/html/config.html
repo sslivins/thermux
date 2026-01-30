@@ -436,7 +436,6 @@
 
         async function uploadFirmware() {
             if (!selectedFile || isUpdating) return;
-            if (!confirm('Upload and install ' + selectedFile.name + '?\n\nWarning: Uploading incorrect firmware may brick the device!')) return;
             
             isUpdating = true;
             const uploadBtn = document.getElementById('upload-btn');
