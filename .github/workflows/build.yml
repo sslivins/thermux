@@ -1,4 +1,4 @@
-name: ESP-IDF Build
+name: ESP-IDF Build & Release
 
 on:
   push:
@@ -29,14 +29,15 @@ jobs:
           path: '.'
 
       - name: Upload firmware artifact
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
-          name: firmware
+          name: firmware-${{ github.ref_name }}
           path: |
             build/esp32-poe-temp-monitor.bin
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
-          retention-days: 30
+          retention-days: 90
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
