@@ -8,10 +8,12 @@
 #include "ota_updater.h"
 #include "nvs_storage.h"
 #include "onewire_temp.h"
+#include "wifi_manager.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_ota_ops.h"
+#include "esp_wifi.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -448,6 +450,61 @@ upload_error:
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Upload failed\"}");
     return ESP_FAIL;
+}
+
+/**
+ * @brief Handler for GET /api/wifi/scan - Scan for available networks
+ */
+static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
+{
+    wifi_ap_record_t ap_records[20];
+    uint16_t ap_count = 0;
+    
+    esp_err_t err = wifi_manager_scan(ap_records, 20, &ap_count);
+    
+    cJSON *root = cJSON_CreateObject();
+    cJSON *networks = cJSON_CreateArray();
+    
+    if (err == ESP_OK) {
+        for (int i = 0; i < ap_count; i++) {
+            /* Skip duplicates and empty SSIDs */
+            if (strlen((char *)ap_records[i].ssid) == 0) continue;
+            
+            /* Check for duplicate SSID already in array */
+            bool duplicate = false;
+            cJSON *item;
+            cJSON_ArrayForEach(item, networks) {
+                cJSON *ssid_item = cJSON_GetObjectItem(item, "ssid");
+                if (ssid_item && strcmp(ssid_item->valuestring, (char *)ap_records[i].ssid) == 0) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            
+            cJSON *network = cJSON_CreateObject();
+            cJSON_AddStringToObject(network, "ssid", (char *)ap_records[i].ssid);
+            cJSON_AddNumberToObject(network, "rssi", ap_records[i].rssi);
+            cJSON_AddNumberToObject(network, "channel", ap_records[i].primary);
+            cJSON_AddBoolToObject(network, "secure", ap_records[i].authmode != WIFI_AUTH_OPEN);
+            cJSON_AddItemToArray(networks, network);
+        }
+        cJSON_AddBoolToObject(root, "success", true);
+    } else {
+        cJSON_AddBoolToObject(root, "success", false);
+        cJSON_AddStringToObject(root, "error", esp_err_to_name(err));
+    }
+    
+    cJSON_AddItemToObject(root, "networks", networks);
+    
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    
+    return ESP_OK;
 }
 
 /**
@@ -907,6 +964,14 @@ esp_err_t web_server_start(void)
         .handler = ota_page_handler,
     };
     httpd_register_uri_handler(s_server, &ota_page_uri);
+
+    /* WiFi scan endpoint */
+    httpd_uri_t wifi_scan_uri = {
+        .uri = "/api/wifi/scan",
+        .method = HTTP_GET,
+        .handler = api_wifi_scan_handler,
+    };
+    httpd_register_uri_handler(s_server, &wifi_scan_uri);
 
     /* WiFi config endpoints */
     httpd_uri_t wifi_config_get_uri = {

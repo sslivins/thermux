@@ -172,7 +172,14 @@
                 <div class="form-group">
                     <label for="wifi-ssid">Network Name (SSID)</label>
                     <div class="current-value" id="wifi-ssid-current">Current: Loading...</div>
-                    <input type="text" id="wifi-ssid" name="ssid" placeholder="Enter WiFi network name" maxlength="31">
+                    <div style="display: flex; gap: 10px; align-items: stretch;">
+                        <select id="wifi-ssid" name="ssid" style="flex: 1;">
+                            <option value="">-- Select a network or type below --</option>
+                        </select>
+                        <button type="button" class="btn btn-secondary" onclick="scanWifi()" id="scan-btn" style="margin: 0; white-space: nowrap;">🔍 Scan</button>
+                    </div>
+                    <input type="text" id="wifi-ssid-manual" placeholder="Or enter network name manually" maxlength="31" style="margin-top: 8px;">
+                    <div class="form-hint">Select from scan results or enter manually for hidden networks</div>
                 </div>
                 <div class="form-group">
                     <label for="wifi-password">Password</label>
@@ -534,11 +541,52 @@
             document.getElementById('progress-bar').classList.remove('show');
         }
 
+        async function scanWifi() {
+            const scanBtn = document.getElementById('scan-btn');
+            const ssidSelect = document.getElementById('wifi-ssid');
+            
+            scanBtn.disabled = true;
+            scanBtn.textContent = '🔄 Scanning...';
+            
+            try {
+                const resp = await fetch('/api/wifi/scan');
+                const result = await resp.json();
+                
+                /* Clear existing options except first */
+                ssidSelect.innerHTML = '<option value="">-- Select a network --</option>';
+                
+                if (result.success && result.networks.length > 0) {
+                    /* Sort by signal strength */
+                    result.networks.sort((a, b) => b.rssi - a.rssi);
+                    
+                    result.networks.forEach(network => {
+                        const option = document.createElement('option');
+                        option.value = network.ssid;
+                        const signal = network.rssi > -50 ? '🟢' : network.rssi > -70 ? '🟡' : '🔴';
+                        const lock = network.secure ? '🔒' : '🔓';
+                        option.textContent = signal + ' ' + network.ssid + ' ' + lock + ' (ch' + network.channel + ')';
+                        ssidSelect.appendChild(option);
+                    });
+                    showToast('Found ' + result.networks.length + ' networks');
+                } else {
+                    showToast('No networks found', true);
+                }
+            } catch (err) {
+                showToast('Scan failed: ' + err.message, true);
+            }
+            
+            scanBtn.disabled = false;
+            scanBtn.textContent = '🔍 Scan';
+        }
+
         document.getElementById('wifi-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const ssid = document.getElementById('wifi-ssid').value;
+            /* Use manual input if provided, otherwise use dropdown */
+            const manualSsid = document.getElementById('wifi-ssid-manual').value.trim();
+            const selectSsid = document.getElementById('wifi-ssid').value;
+            const ssid = manualSsid || selectSsid;
             const password = document.getElementById('wifi-password').value;
-            if (!ssid) { showToast('Please enter WiFi SSID', true); return; }
+            if (!ssid) { showToast('Please select or enter a WiFi network', true); return; }
             try {
                 const resp = await fetch('/api/config/wifi', {
                     method: 'POST',

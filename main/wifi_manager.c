@@ -138,3 +138,44 @@ esp_err_t wifi_manager_set_credentials(const char *ssid, const char *password)
     ESP_LOGI(TAG, "WiFi credentials updated");
     return ESP_OK;
 }
+
+esp_err_t wifi_manager_scan(wifi_ap_record_t *ap_records, uint16_t max_records, uint16_t *found_count)
+{
+    ESP_LOGI(TAG, "Starting WiFi scan...");
+    
+    /* Configure scan */
+    wifi_scan_config_t scan_config = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = false,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+        .scan_time.active.min = 100,
+        .scan_time.active.max = 300,
+    };
+    
+    /* Start blocking scan */
+    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi scan failed to start: %s", esp_err_to_name(err));
+        return err;
+    }
+    
+    /* Get scan results */
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+    ESP_LOGI(TAG, "WiFi scan found %d networks", ap_count);
+    
+    if (ap_count > max_records) {
+        ap_count = max_records;
+    }
+    
+    err = esp_wifi_scan_get_ap_records(&ap_count, ap_records);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get scan results: %s", esp_err_to_name(err));
+        return err;
+    }
+    
+    *found_count = ap_count;
+    return ESP_OK;
+}

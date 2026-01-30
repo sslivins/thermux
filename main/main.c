@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_system.h"
+#include "esp_mac.h"
 #include "esp_log.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
@@ -35,7 +36,7 @@ EventGroupHandle_t network_event_group;
 const int NETWORK_CONNECTED_BIT = BIT0;
 
 /* Application version - update for each release */
-const char *APP_VERSION = "1.0.4";
+const char *APP_VERSION = "1.0.5";
 
 /* Runtime sensor settings (can be changed via web UI) */
 static uint32_t s_read_interval_ms = CONFIG_SENSOR_READ_INTERVAL_MS;
@@ -57,6 +58,8 @@ void set_sensor_publish_interval(uint32_t ms) {
 
 /**
  * @brief Initialize mDNS service for device discovery
+ * 
+ * Uses last 2 bytes of MAC address to create unique hostname: temp-monitor-XXXX
  */
 static esp_err_t init_mdns(void)
 {
@@ -66,13 +69,19 @@ static esp_err_t init_mdns(void)
         return err;
     }
 
-    mdns_hostname_set(CONFIG_MDNS_HOSTNAME);
+    /* Generate unique hostname from MAC address */
+    uint8_t mac[6];
+    char hostname[32];
+    esp_read_mac(mac, ESP_MAC_ETH);
+    snprintf(hostname, sizeof(hostname), "temp-monitor-%02x%02x", mac[4], mac[5]);
+    
+    mdns_hostname_set(hostname);
     mdns_instance_name_set("ESP32 POE Temperature Monitor");
     
     /* Add HTTP service for web interface discovery */
     mdns_service_add(NULL, "_http", "_tcp", CONFIG_WEB_SERVER_PORT, NULL, 0);
     
-    ESP_LOGI(TAG, "mDNS hostname: %s.local", CONFIG_MDNS_HOSTNAME);
+    ESP_LOGI(TAG, "mDNS hostname: %s.local", hostname);
     return ESP_OK;
 }
 
