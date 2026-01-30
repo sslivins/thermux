@@ -307,6 +307,8 @@ static esp_err_t api_ota_update_handler(httpd_req_t *req)
 
 /**
  * @brief Handler for POST /api/ota/upload - Manual firmware upload
+ * 
+ * Expects raw binary firmware data (not multipart form)
  */
 static esp_err_t api_ota_upload_handler(httpd_req_t *req)
 {
@@ -314,9 +316,11 @@ static esp_err_t api_ota_upload_handler(httpd_req_t *req)
     esp_ota_handle_t ota_handle = 0;
     const esp_partition_t *update_partition = NULL;
     char *buf = NULL;
+    const int buf_size = 4096;
     int received = 0;
     int remaining = req->content_len;
     bool ota_started = false;
+    bool first_chunk = true;
     
     ESP_LOGI(TAG, "Starting manual firmware upload, size: %d bytes", req->content_len);
     
@@ -329,7 +333,7 @@ static esp_err_t api_ota_upload_handler(httpd_req_t *req)
     }
     
     /* Allocate receive buffer */
-    buf = malloc(4096);
+    buf = malloc(buf_size);
     if (!buf) {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
@@ -350,27 +354,40 @@ static esp_err_t api_ota_upload_handler(httpd_req_t *req)
     
     ESP_LOGI(TAG, "Writing to partition: %s at 0x%lx", update_partition->label, update_partition->address);
     
-    /* Begin OTA */
-    err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
-        free(buf);
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Failed to start OTA\"}");
-        return ESP_FAIL;
-    }
-    ota_started = true;
-    
     /* Receive and write firmware data */
     while (remaining > 0) {
-        int recv_len = httpd_req_recv(req, buf, MIN(remaining, 4096));
+        int recv_len = httpd_req_recv(req, buf, MIN(remaining, buf_size));
         if (recv_len < 0) {
             if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
                 continue;
             }
             ESP_LOGE(TAG, "Receive error: %d", recv_len);
             goto upload_error;
+        }
+        
+        /* Validate first chunk contains valid ESP32 firmware */
+        if (first_chunk) {
+            if ((uint8_t)buf[0] != 0xE9) {
+                ESP_LOGE(TAG, "Invalid firmware magic byte: 0x%02x (expected 0xE9)", (uint8_t)buf[0]);
+                free(buf);
+                httpd_resp_set_status(req, "400 Bad Request");
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Invalid firmware file - not an ESP32 binary\"}");
+                return ESP_FAIL;
+            }
+            
+            /* Begin OTA now that we've validated the firmware */
+            err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+                free(buf);
+                httpd_resp_set_status(req, "500 Internal Server Error");
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Failed to start OTA\"}");
+                return ESP_FAIL;
+            }
+            ota_started = true;
+            first_chunk = false;
         }
         
         err = esp_ota_write(ota_handle, buf, recv_len);
@@ -394,7 +411,7 @@ static esp_err_t api_ota_upload_handler(httpd_req_t *req)
         free(buf);
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
-        httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Firmware validation failed\"}");
+        httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Firmware validation failed - file may be corrupted\"}");
         return ESP_FAIL;
     }
     

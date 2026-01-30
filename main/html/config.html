@@ -429,23 +429,30 @@
             updateStatus.className = 'update-status checking';
             
             try {
-                const formData = new FormData();
-                formData.append('firmware', selectedFile);
-                
                 const xhr = new XMLHttpRequest();
                 xhr.open('POST', '/api/ota/upload', true);
+                xhr.setRequestHeader('Content-Type', 'application/octet-stream');
                 
                 xhr.upload.onprogress = function(e) {
                     if (e.lengthComputable) {
                         const percent = Math.round((e.loaded / e.total) * 50);
                         progressFill.style.width = percent + '%';
                         progressFill.textContent = percent + '%';
+                        updateStatus.textContent = 'Uploading... ' + Math.round(e.loaded / 1024) + ' KB';
                     }
                 };
                 
                 xhr.onload = function() {
                     if (xhr.status === 200) {
-                        simulateProgress(progressFill, updateStatus, 'Installing firmware...', 50);
+                        let result;
+                        try { result = JSON.parse(xhr.responseText); } catch(e) { result = {}; }
+                        if (result.success) {
+                            simulateProgress(progressFill, updateStatus, 'Installing firmware...', 50);
+                        } else {
+                            updateStatus.textContent = '✗ ' + (result.message || 'Upload failed');
+                            updateStatus.className = 'update-status';
+                            resetUpdateButtons();
+                        }
                     } else {
                         let msg = 'Upload failed';
                         try { msg = JSON.parse(xhr.responseText).message || msg; } catch(e) {}
@@ -461,9 +468,10 @@
                     resetUpdateButtons();
                 };
                 
-                xhr.send(formData);
+                /* Send raw binary data instead of FormData */
+                xhr.send(selectedFile);
             } catch (err) {
-                updateStatus.textContent = '✗ Error uploading firmware';
+                updateStatus.textContent = '✗ Error uploading firmware: ' + err.message;
                 updateStatus.className = 'update-status';
                 resetUpdateButtons();
             }
