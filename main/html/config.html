@@ -277,6 +277,19 @@
             </div>
         </div>
 
+        <div class="config-section">
+            <div class="section-title">📋 System Logs</div>
+            <div class="btn-row" style="margin-bottom: 15px;">
+                <button class="btn btn-primary" onclick="refreshLogs()">🔄 Refresh</button>
+                <button class="btn btn-secondary" onclick="clearLogs()">🗑️ Clear</button>
+                <label style="display: flex; align-items: center; gap: 8px; color: #ccc; cursor: pointer;">
+                    <input type="checkbox" id="auto-refresh" onchange="toggleAutoRefresh()" style="width: auto;">
+                    Auto-refresh
+                </label>
+            </div>
+            <pre id="log-output" style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; font-family: monospace; font-size: 0.8em; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; color: #aaa;">Click "Refresh" to load logs...</pre>
+        </div>
+
         <div class="config-section danger-zone">
             <div class="section-title">⚠️ System</div>
             <p style="margin-bottom: 15px; color: #ccc;">Device restart is required after changing WiFi settings.</p>
@@ -644,6 +657,43 @@
                 if (resp.ok) { showToast('MQTT reconnecting...'); setTimeout(loadConfig, 3000); }
                 else { showToast('Failed to reconnect', true); }
             } catch (err) { showToast('Error reconnecting MQTT', true); }
+        }
+
+        let logRefreshInterval = null;
+
+        async function refreshLogs() {
+            try {
+                const resp = await fetch('/api/logs');
+                const logs = await resp.text();
+                const output = document.getElementById('log-output');
+                output.textContent = logs || '(No logs yet)';
+                output.scrollTop = output.scrollHeight;
+            } catch (err) {
+                document.getElementById('log-output').textContent = 'Error loading logs';
+            }
+        }
+
+        async function clearLogs() {
+            try {
+                await fetch('/api/logs/clear', { method: 'POST' });
+                document.getElementById('log-output').textContent = '(Logs cleared)';
+                showToast('Logs cleared');
+            } catch (err) {
+                showToast('Failed to clear logs', true);
+            }
+        }
+
+        function toggleAutoRefresh() {
+            const checkbox = document.getElementById('auto-refresh');
+            if (checkbox.checked) {
+                refreshLogs();
+                logRefreshInterval = setInterval(refreshLogs, 2000);
+            } else {
+                if (logRefreshInterval) {
+                    clearInterval(logRefreshInterval);
+                    logRefreshInterval = null;
+                }
+            }
         }
 
         async function restartDevice() {

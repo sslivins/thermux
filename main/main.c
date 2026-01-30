@@ -27,6 +27,7 @@
 #include "mqtt_client_ha.h"
 #include "web_server.h"
 #include "ota_updater.h"
+#include "log_buffer.h"
 
 static const char *TAG = "main";
 
@@ -35,7 +36,7 @@ EventGroupHandle_t network_event_group;
 const int NETWORK_CONNECTED_BIT = BIT0;
 
 /* Application version - update for each release */
-const char *APP_VERSION = "1.0.6";
+const char *APP_VERSION = "1.0.7";
 
 /* Runtime sensor settings (can be changed via web UI) */
 static uint32_t s_read_interval_ms = CONFIG_SENSOR_READ_INTERVAL_MS;
@@ -179,6 +180,9 @@ static void watchdog_task(void *pvParameters)
 
 void app_main(void)
 {
+    /* Initialize log buffer first to capture all logs */
+    log_buffer_init(4096);  /* 4KB ring buffer */
+    
     ESP_LOGI(TAG, "=================================");
     ESP_LOGI(TAG, "ESP32-POE Temperature Monitor");
     ESP_LOGI(TAG, "Version: %s", APP_VERSION);

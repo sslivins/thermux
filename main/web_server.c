@@ -9,6 +9,7 @@
 #include "nvs_storage.h"
 #include "onewire_temp.h"
 #include "wifi_manager.h"
+#include "log_buffer.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -508,6 +509,39 @@ static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
 }
 
 /**
+ * @brief Handler for GET /api/logs - returns recent log buffer contents
+ */
+static esp_err_t api_logs_get_handler(httpd_req_t *req)
+{
+    /* Allocate buffer for logs (same size as ring buffer) */
+    char *log_data = malloc(4096);
+    if (!log_data) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+    
+    size_t len = log_buffer_get(log_data, 4096);
+    
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, log_data, len);
+    
+    free(log_data);
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/logs/clear - clears log buffer
+ */
+static esp_err_t api_logs_clear_handler(httpd_req_t *req)
+{
+    log_buffer_clear();
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
+/**
  * @brief Handler for GET /api/config/wifi
  */
 static esp_err_t api_config_wifi_get_handler(httpd_req_t *req)
@@ -972,6 +1006,21 @@ esp_err_t web_server_start(void)
         .handler = api_wifi_scan_handler,
     };
     httpd_register_uri_handler(s_server, &wifi_scan_uri);
+
+    /* Log viewer endpoints */
+    httpd_uri_t logs_get_uri = {
+        .uri = "/api/logs",
+        .method = HTTP_GET,
+        .handler = api_logs_get_handler,
+    };
+    httpd_register_uri_handler(s_server, &logs_get_uri);
+
+    httpd_uri_t logs_clear_uri = {
+        .uri = "/api/logs/clear",
+        .method = HTTP_POST,
+        .handler = api_logs_clear_handler,
+    };
+    httpd_register_uri_handler(s_server, &logs_clear_uri);
 
     /* WiFi config endpoints */
     httpd_uri_t wifi_config_get_uri = {

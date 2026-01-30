@@ -38,6 +38,7 @@ idf_component_register(
         "ota_updater.c"
         "nvs_storage.c"
         "sensor_manager.c"
+        "log_buffer.c"
     INCLUDE_DIRS "."
     REQUIRES 
         nvs_flash
