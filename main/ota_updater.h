@@ -60,6 +60,12 @@ esp_err_t ota_start_update(void);
 bool ota_update_in_progress(void);
 
 /**
+ * @brief Get current update state
+ * @return 0=idle, 1=downloading, 2=complete (rebooting), -1=failed
+ */
+int ota_get_update_state(void);
+
+/**
  * @brief Get current download progress (0-100)
  */
 int ota_get_download_progress(void);

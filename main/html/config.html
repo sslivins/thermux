@@ -86,6 +86,8 @@
             border-radius: 12px;
             font-size: 0.8em;
             margin-left: 10px;
+            color: #fff;
+            font-weight: 500;
         }
         .status-connected { background: #22c55e; }
         .status-disconnected { background: #ef4444; }
@@ -512,7 +514,7 @@
                 
                 xhr.upload.onprogress = function(e) {
                     if (e.lengthComputable) {
-                        const percent = Math.round((e.loaded / e.total) * 50);
+                        const percent = Math.round((e.loaded / e.total) * 95);
                         progressFill.style.width = percent + '%';
                         progressFill.textContent = percent + '%';
                         updateStatus.textContent = 'Uploading... ' + Math.round(e.loaded / 1024) + ' KB';
@@ -524,7 +526,7 @@
                         let result;
                         try { result = JSON.parse(xhr.responseText); } catch(e) { result = {}; }
                         if (result.success) {
-                            simulateProgress(progressFill, updateStatus, 'Installing firmware...', 50);
+                            simulateProgress(progressFill, updateStatus, 'Installing firmware...', 95);
                         } else {
                             updateStatus.textContent = '✗ ' + (result.message || 'Upload failed');
                             updateStatus.className = 'update-status';
@@ -571,7 +573,14 @@
             const maxOnlineAttempts = 60;  /* Wait up to 2 minutes for device to come back */
             
             /* Phase 1: Wait for device to go OFFLINE (confirms reboot started)
-               Uses real download progress from device when available */
+               Uses real download progress from device when available
+               
+               update_state values from backend:
+                 0 = idle (not started yet)
+                 1 = downloading/flashing
+                 2 = complete (about to reboot)
+                -1 = failed
+            */
             let offlineAttempts = 0;
             let deviceWentOffline = false;
             
@@ -588,25 +597,38 @@
                         deviceWentOffline = true;
                     } else {
                         const status = await response.json();
+                        const state = status.update_state;
+                        const downloadPct = status.download_progress || 0;
                         
-                        /* Use real download progress if available */
-                        if (status.downloading && status.download_progress > 0) {
-                            /* Scale download progress (0-100) to visual progress (startPercent-85%) */
-                            const downloadPct = status.download_progress;
-                            const visualProgress = startPercent + ((85 - startPercent) * downloadPct / 100);
+                        if (state === 2) {
+                            /* Complete - about to reboot */
+                            progressFill.style.width = '95%';
+                            progressFill.textContent = '95%';
+                            updateStatus.textContent = 'Firmware verified, rebooting...';
+                        } else if (state === -1) {
+                            /* Failed */
+                            updateStatus.textContent = 'Update failed! Check device logs.';
+                            updateStatus.className = 'update-status';
+                            resetUpdateButtons();
+                            return;
+                        } else if (state === 1) {
+                            /* Downloading - show progress (0-95%) */
+                            const visualProgress = startPercent + ((95 - startPercent) * downloadPct / 100);
                             progressFill.style.width = visualProgress + '%';
                             progressFill.textContent = Math.round(visualProgress) + '%';
                             
-                            /* Show download stats */
                             const receivedKB = Math.round(status.download_received / 1024);
                             const totalKB = Math.round(status.download_total / 1024);
-                            if (totalKB > 0) {
+                            if (downloadPct > 0 && totalKB > 0) {
                                 updateStatus.textContent = 'Downloading firmware... ' + receivedKB + ' / ' + totalKB + ' KB (' + downloadPct + '%)';
-                            } else {
+                            } else if (downloadPct > 0) {
                                 updateStatus.textContent = 'Downloading firmware... ' + downloadPct + '%';
+                            } else {
+                                updateStatus.textContent = 'Connecting to GitHub...';
                             }
                         } else {
-                            updateStatus.textContent = 'Starting firmware download...';
+                            /* Idle (state=0) - waiting to start */
+                            updateStatus.textContent = 'Starting update...';
                         }
                     }
                 } catch (e) {
@@ -626,20 +648,20 @@
                 return;
             }
             
-            /* Device went offline - jump to 85% */
-            progressFill.style.width = '85%';
-            progressFill.textContent = '85%';
+            /* Device went offline - show 95% */
+            progressFill.style.width = '95%';
+            progressFill.textContent = '95%';
             updateStatus.textContent = 'Device restarting...';
             
             /* Phase 2: Wait for device to come back ONLINE
-               Progress: 85% -> 100% */
+               Progress: 95% -> 100% */
             let onlineAttempts = 0;
             
             const checkInterval = setInterval(async () => {
                 onlineAttempts++;
                 
-                /* Update progress bar: scale from 85% to 99% */
-                const phase2Progress = 85 + (14 * onlineAttempts / maxOnlineAttempts);
+                /* Update progress bar: scale from 95% to 99% */
+                const phase2Progress = 95 + (4 * onlineAttempts / maxOnlineAttempts);
                 progressFill.style.width = phase2Progress + '%';
                 progressFill.textContent = Math.round(phase2Progress) + '%';
                 

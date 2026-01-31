@@ -357,7 +357,7 @@ static void ota_update_task(void *pvParameters)
         .url = s_download_url,
         .timeout_ms = 60000,
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .buffer_size = 1024,
+        .buffer_size = 4096,      /* Larger buffer for faster download */
         .buffer_size_tx = 1024,
         .keep_alive_enable = true,
     };
@@ -365,10 +365,11 @@ static void ota_update_task(void *pvParameters)
     esp_https_ota_config_t ota_config = {
         .http_config = &config,
         .partial_http_download = true,
-        .max_http_request_size = 64 * 1024,
+        .max_http_request_size = 8 * 1024,  /* Smaller chunks for more progress updates */
     };
     
     esp_https_ota_handle_t ota_handle = NULL;
+    ESP_LOGI(TAG, "Connecting to GitHub...");
     esp_err_t err = esp_https_ota_begin(&ota_config, &ota_handle);
     
     if (err != ESP_OK) {
@@ -378,11 +379,15 @@ static void ota_update_task(void *pvParameters)
         return;
     }
     
-    /* Get total image size */
-    s_download_total = esp_https_ota_get_image_size(ota_handle);
-    ESP_LOGI(TAG, "Image size: %d bytes", s_download_total);
+    /* Get total image size - may be 0 if server doesn't provide Content-Length */
+    int real_total = esp_https_ota_get_image_size(ota_handle);
+    ESP_LOGI(TAG, "Image size from server: %d bytes (0 means unknown)", real_total);
+    
+    /* If image size unknown, estimate ~1.1MB based on typical firmware size */
+    s_download_total = (real_total > 0) ? real_total : (1100 * 1024);
     
     /* Download and flash in chunks */
+    int last_logged_pct = -1;
     while (1) {
         err = esp_https_ota_perform(ota_handle);
         if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
@@ -391,12 +396,18 @@ static void ota_update_task(void *pvParameters)
         
         /* Update progress */
         s_download_received = esp_https_ota_get_image_len_read(ota_handle);
-        if (s_download_total > 0) {
-            s_download_progress = (s_download_received * 100) / s_download_total;
+        s_download_progress = (s_download_received * 100) / s_download_total;
+        if (s_download_progress > 99) s_download_progress = 99;  /* Cap at 99 until complete */
+        
+        /* Log every 5% change to avoid log spam */
+        if (s_download_progress / 5 != last_logged_pct / 5) {
+            ESP_LOGI(TAG, "Download: %d KB / %d KB (%d%%)", 
+                     s_download_received / 1024, s_download_total / 1024, s_download_progress);
+            last_logged_pct = s_download_progress;
         }
         
-        ESP_LOGD(TAG, "Download progress: %d/%d (%d%%)", 
-                 s_download_received, s_download_total, s_download_progress);
+        /* Yield to allow HTTP server to respond to status requests */
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
     
     if (err != ESP_OK) {
@@ -459,6 +470,18 @@ const char* ota_get_current_version(void)
 bool ota_update_in_progress(void)
 {
     return s_update_state == OTA_UPDATE_DOWNLOADING;
+}
+
+int ota_get_update_state(void)
+{
+    /* Return state: 0=idle, 1=downloading, 2=complete, -1=failed */
+    switch (s_update_state) {
+        case OTA_UPDATE_IDLE: return 0;
+        case OTA_UPDATE_DOWNLOADING: return 1;
+        case OTA_UPDATE_COMPLETE: return 2;
+        case OTA_UPDATE_FAILED: return -1;
+        default: return 0;
+    }
 }
 
 int ota_get_download_progress(void)

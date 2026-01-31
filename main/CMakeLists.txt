@@ -8,7 +8,9 @@ file(MAKE_DIRECTORY ${HTML_BUILD_DIR})
 # Find Python
 find_package(Python3 REQUIRED)
 
-# Execute minification script during configuration
+# Run HTML minification during configuration
+# Note: If you edit HTML files, run: python scripts/html_minifier.py main/html main/html_min
+# Or do a full clean build: idf.py fullclean && idf.py build
 execute_process(
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/html_minifier.py" 
             "${HTML_SRC_DIR}" "${HTML_BUILD_DIR}"
