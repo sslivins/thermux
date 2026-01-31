@@ -357,29 +357,79 @@
             updateStatus.className = 'update-status checking';
             
             try {
+                /* Start async check */
                 const response = await fetch('/api/ota/check', { method: 'POST' });
-                const result = await response.json();
-                document.getElementById('fw-current-version').textContent = result.current_version;
-                latestVersion.textContent = result.latest_version || 'Unknown';
+                const startResult = await response.json();
                 
-                if (result.update_available) {
-                    updateAvailable = true;
-                    updateStatus.textContent = '✓ Update available! Click "Install Update" to upgrade.';
-                    updateStatus.className = 'update-status available';
-                    installBtn.disabled = false;
-                } else {
-                    updateAvailable = false;
-                    updateStatus.textContent = '✓ You are running the latest version';
-                    updateStatus.className = 'update-status current';
-                    installBtn.disabled = true;
+                if (startResult.checking) {
+                    /* Poll for result */
+                    pollForStatus(latestVersion, updateStatus, installBtn, checkBtn);
+                } else if (startResult.error) {
+                    throw new Error(startResult.message || 'Failed to start check');
                 }
             } catch (err) {
                 latestVersion.textContent = 'Error';
-                updateStatus.textContent = '✗ Failed to check for updates';
+                updateStatus.textContent = '✗ ' + (err.message || 'Failed to check for updates');
                 updateStatus.className = 'update-status';
+                checkBtn.disabled = false;
+                checkBtn.textContent = '🔍 Check for Updates';
             }
-            checkBtn.disabled = false;
-            checkBtn.textContent = '🔍 Check for Updates';
+        }
+
+        function pollForStatus(latestVersion, updateStatus, installBtn, checkBtn) {
+            let attempts = 0;
+            const maxAttempts = 30;
+            
+            const pollInterval = setInterval(async () => {
+                attempts++;
+                try {
+                    const resp = await fetch('/api/ota/status');
+                    const status = await resp.json();
+                    
+                    if (!status.checking) {
+                        clearInterval(pollInterval);
+                        
+                        if (status.result === 1) {
+                            /* Success */
+                            latestVersion.textContent = status.latest_version || 'Unknown';
+                            document.getElementById('fw-current-version').textContent = status.current_version;
+                            
+                            if (status.update_available) {
+                                updateAvailable = true;
+                                updateStatus.textContent = '✓ Update available! Click "Install Update" to upgrade.';
+                                updateStatus.className = 'update-status available';
+                                installBtn.disabled = false;
+                            } else {
+                                updateAvailable = false;
+                                updateStatus.textContent = '✓ You are running the latest version';
+                                updateStatus.className = 'update-status current';
+                                installBtn.disabled = true;
+                            }
+                        } else {
+                            /* Failed */
+                            latestVersion.textContent = 'Error';
+                            updateStatus.textContent = '✗ Failed to check for updates (check logs)';
+                            updateStatus.className = 'update-status';
+                        }
+                        checkBtn.disabled = false;
+                        checkBtn.textContent = '🔍 Check for Updates';
+                        return;
+                    }
+                    
+                    updateStatus.textContent = 'Checking for updates... (' + attempts + 's)';
+                } catch (e) {
+                    /* Ignore fetch errors during polling */
+                }
+                
+                if (attempts >= maxAttempts) {
+                    clearInterval(pollInterval);
+                    latestVersion.textContent = 'Timeout';
+                    updateStatus.textContent = '✗ Check timed out. Please try again.';
+                    updateStatus.className = 'update-status';
+                    checkBtn.disabled = false;
+                    checkBtn.textContent = '🔍 Check for Updates';
+                }
+            }, 1000);
         }
 
         async function installUpdate() {

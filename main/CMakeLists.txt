@@ -10,7 +10,7 @@ find_package(Python3 REQUIRED)
 
 # Execute minification script during configuration
 execute_process(
-    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/minify_html.py" 
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/html_minifier.py" 
             "${HTML_SRC_DIR}" "${HTML_BUILD_DIR}"
     RESULT_VARIABLE MINIFY_RESULT
     OUTPUT_VARIABLE MINIFY_OUTPUT
@@ -61,5 +61,4 @@ idf_component_register(
         "certs/github_root_ca.pem"
         "${HTML_BUILD_DIR}/index.html"
         "${HTML_BUILD_DIR}/config.html"
-        "${HTML_BUILD_DIR}/ota.html"
 )

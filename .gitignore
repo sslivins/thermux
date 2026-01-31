@@ -4,3 +4,7 @@
 sdkconfig.old
 .clangd
 main/html_min/
+
+# Python
+__pycache__/
+*.pyc

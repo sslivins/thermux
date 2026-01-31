@@ -15,9 +15,27 @@
 esp_err_t ota_updater_init(void);
 
 /**
- * @brief Check GitHub releases for available update
+ * @brief Check GitHub releases for available update (blocking)
+ * @note Use ota_check_for_update_async() from HTTP handlers to avoid stack overflow
  */
 esp_err_t ota_check_for_update(void);
+
+/**
+ * @brief Start async check for updates (non-blocking)
+ * @return ESP_OK if check started, ESP_ERR_INVALID_STATE if already in progress
+ */
+esp_err_t ota_check_for_update_async(void);
+
+/**
+ * @brief Check if async OTA check is in progress
+ */
+bool ota_check_in_progress(void);
+
+/**
+ * @brief Get async OTA check result
+ * @return 1 = complete, 0 = in progress, -1 = failed
+ */
+int ota_get_check_result(void);
 
 /**
  * @brief Check if an update is available
