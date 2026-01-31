@@ -556,41 +556,65 @@
 
         function simulateProgress(progressFill, updateStatus, initialMsg, startPercent = 0) {
             updateStatus.textContent = initialMsg;
-            let progress = startPercent;
-            const progressInterval = setInterval(() => {
-                progress += Math.random() * 10;
-                if (progress > 90) progress = 90;
-                progressFill.style.width = progress + '%';
-                progressFill.textContent = Math.round(progress) + '%';
-                if (progress > 30) updateStatus.textContent = 'Installing firmware...';
-                if (progress > 60) updateStatus.textContent = 'Verifying...';
-                if (progress > 80) updateStatus.textContent = 'Finalizing...';
-            }, 500);
+            progressFill.style.width = startPercent + '%';
+            progressFill.textContent = startPercent + '%';
             
-            /* Wait for device to go offline first, then wait for it to come back */
-            setTimeout(() => {
-                clearInterval(progressInterval);
-                progressFill.style.width = '100%';
-                progressFill.textContent = '100%';
-                updateStatus.textContent = '✓ Update complete! Device restarting...';
-                updateStatus.className = 'update-status available';
-                waitForReboot();
-            }, 15000);
+            /* Start waiting for reboot immediately - waitForReboot() handles detecting 
+               when the device actually goes offline (after OTA download completes) */
+            waitForReboot();
         }
 
         async function waitForReboot() {
             const updateStatus = document.getElementById('update-status');
-            let attempts = 0;
-            const maxAttempts = 60;
+            const maxOfflineAttempts = 90; /* Wait up to 3 minutes for device to go offline (OTA download can be slow) */
+            const maxOnlineAttempts = 60;  /* Wait up to 2 minutes for device to come back */
             
-            /* First wait for device to go offline */
-            updateStatus.textContent = 'Waiting for device to restart...';
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            /* Phase 1: Wait for device to go OFFLINE (confirms reboot started) */
+            updateStatus.textContent = 'Waiting for update to complete...';
+            let offlineAttempts = 0;
+            let deviceWentOffline = false;
+            
+            while (offlineAttempts < maxOfflineAttempts && !deviceWentOffline) {
+                offlineAttempts++;
+                try {
+                    const response = await fetch('/api/status', { 
+                        method: 'GET', 
+                        signal: AbortSignal.timeout(2000),
+                        cache: 'no-store'
+                    });
+                    if (!response.ok) {
+                        deviceWentOffline = true;
+                    }
+                } catch (e) {
+                    /* Network error = device is offline */
+                    deviceWentOffline = true;
+                }
+                
+                if (!deviceWentOffline) {
+                    updateStatus.textContent = 'Installing update... (' + offlineAttempts + '/' + maxOfflineAttempts + ')';
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+            }
+            
+            if (!deviceWentOffline) {
+                updateStatus.textContent = 'Update may have failed - device never restarted. Please check manually.';
+                updateStatus.className = 'update-status';
+                resetUpdateButtons();
+                return;
+            }
+            
+            /* Phase 2: Wait for device to come back ONLINE */
+            updateStatus.textContent = 'Device restarting...';
+            let onlineAttempts = 0;
             
             const checkInterval = setInterval(async () => {
-                attempts++;
+                onlineAttempts++;
                 try {
-                    const response = await fetch('/api/status', { method: 'GET', signal: AbortSignal.timeout(2000) });
+                    const response = await fetch('/api/status', { 
+                        method: 'GET', 
+                        signal: AbortSignal.timeout(2000),
+                        cache: 'no-store'
+                    });
                     if (response.ok) {
                         clearInterval(checkInterval);
                         updateStatus.textContent = '✓ Device is back online! Refreshing...';
@@ -599,8 +623,8 @@
                         return;
                     }
                 } catch (e) { /* Device still rebooting */ }
-                updateStatus.textContent = 'Waiting for device... (' + attempts + '/' + maxAttempts + ')';
-                if (attempts >= maxAttempts) {
+                updateStatus.textContent = 'Waiting for device... (' + onlineAttempts + '/' + maxOnlineAttempts + ')';
+                if (onlineAttempts >= maxOnlineAttempts) {
                     clearInterval(checkInterval);
                     updateStatus.textContent = 'Device may have restarted. Please refresh manually.';
                     resetUpdateButtons();
