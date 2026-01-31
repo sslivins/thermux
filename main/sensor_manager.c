@@ -145,6 +145,10 @@ esp_err_t sensor_manager_publish_all(void)
                                         s_sensors[i].hw_sensor.temperature);
         }
     }
+    
+    /* Also publish diagnostic data (network status) */
+    mqtt_ha_publish_diagnostics();
+    
     return ESP_OK;
 }
 

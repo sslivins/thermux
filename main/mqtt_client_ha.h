@@ -55,4 +55,15 @@ esp_err_t mqtt_ha_publish_status(bool online);
  */
 esp_err_t mqtt_ha_publish_discovery_all(void);
 
+/**
+ * @brief Register diagnostic entities with Home Assistant
+ * (Ethernet status, WiFi status, IP address)
+ */
+esp_err_t mqtt_ha_register_diagnostic_entities(void);
+
+/**
+ * @brief Publish diagnostic data (network status)
+ */
+esp_err_t mqtt_ha_publish_diagnostics(void);
+
 #endif /* MQTT_CLIENT_HA_H */

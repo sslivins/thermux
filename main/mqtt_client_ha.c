@@ -7,6 +7,8 @@
 #include "mqtt_client.h"
 #include "sensor_manager.h"
 #include "nvs_storage.h"
+#include "ethernet_manager.h"
+#include "wifi_manager.h"
 #include "esp_log.h"
 #include "cJSON.h"
 #include <string.h>
@@ -266,9 +268,190 @@ esp_err_t mqtt_ha_publish_discovery_all(void)
         mqtt_ha_register_sensor(sensors[i].address_str, name);
     }
     
-    ESP_LOGI(TAG, "Published discovery for %d sensors", count);
+    /* Register diagnostic entities */
+    mqtt_ha_register_diagnostic_entities();
+    
+    ESP_LOGI(TAG, "Published discovery for %d sensors + diagnostics", count);
     return ESP_OK;
 #else
     return ESP_OK;
 #endif
+}
+
+/**
+ * @brief Helper to create device info JSON object (shared between entities)
+ */
+static cJSON* create_device_info(void)
+{
+    cJSON *device = cJSON_CreateObject();
+    cJSON_AddStringToObject(device, "name", "ESP32 POE Temperature Monitor");
+    cJSON_AddStringToObject(device, "manufacturer", "Custom");
+    cJSON_AddStringToObject(device, "model", "ESP32-POE-ISO");
+    cJSON_AddStringToObject(device, "sw_version", APP_VERSION);
+    
+    cJSON *identifiers = cJSON_CreateArray();
+    cJSON_AddItemToArray(identifiers, cJSON_CreateString(CONFIG_MQTT_BASE_TOPIC));
+    cJSON_AddItemToObject(device, "identifiers", identifiers);
+    
+    return device;
+}
+
+esp_err_t mqtt_ha_register_diagnostic_entities(void)
+{
+#if CONFIG_HA_DISCOVERY_ENABLED
+    if (!s_connected || s_mqtt_client == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Register Ethernet Status binary sensor */
+    {
+        char discovery_topic[256];
+        snprintf(discovery_topic, sizeof(discovery_topic), 
+                 "%s/binary_sensor/%s_ethernet/config",
+                 CONFIG_HA_DISCOVERY_PREFIX, CONFIG_MQTT_BASE_TOPIC);
+
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddStringToObject(root, "name", "Ethernet");
+        
+        char unique_id[64];
+        snprintf(unique_id, sizeof(unique_id), "%s_ethernet", CONFIG_MQTT_BASE_TOPIC);
+        cJSON_AddStringToObject(root, "unique_id", unique_id);
+        
+        char state_topic[128];
+        snprintf(state_topic, sizeof(state_topic), "%s/diagnostic/ethernet", CONFIG_MQTT_BASE_TOPIC);
+        cJSON_AddStringToObject(root, "state_topic", state_topic);
+        
+        char availability_topic[128];
+        snprintf(availability_topic, sizeof(availability_topic), "%s/status", CONFIG_MQTT_BASE_TOPIC);
+        cJSON_AddStringToObject(root, "availability_topic", availability_topic);
+        
+        cJSON_AddStringToObject(root, "device_class", "connectivity");
+        cJSON_AddStringToObject(root, "entity_category", "diagnostic");
+        cJSON_AddStringToObject(root, "payload_on", "ON");
+        cJSON_AddStringToObject(root, "payload_off", "OFF");
+        
+        cJSON_AddItemToObject(root, "device", create_device_info());
+
+        char *payload = cJSON_PrintUnformatted(root);
+        cJSON_Delete(root);
+        
+        if (payload) {
+            esp_mqtt_client_publish(s_mqtt_client, discovery_topic, payload, 0, 1, 1);
+            free(payload);
+            ESP_LOGI(TAG, "Registered diagnostic: Ethernet status");
+        }
+    }
+
+    /* Register WiFi Status binary sensor */
+    {
+        char discovery_topic[256];
+        snprintf(discovery_topic, sizeof(discovery_topic), 
+                 "%s/binary_sensor/%s_wifi/config",
+                 CONFIG_HA_DISCOVERY_PREFIX, CONFIG_MQTT_BASE_TOPIC);
+
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddStringToObject(root, "name", "WiFi");
+        
+        char unique_id[64];
+        snprintf(unique_id, sizeof(unique_id), "%s_wifi", CONFIG_MQTT_BASE_TOPIC);
+        cJSON_AddStringToObject(root, "unique_id", unique_id);
+        
+        char state_topic[128];
+        snprintf(state_topic, sizeof(state_topic), "%s/diagnostic/wifi", CONFIG_MQTT_BASE_TOPIC);
+        cJSON_AddStringToObject(root, "state_topic", state_topic);
+        
+        char availability_topic[128];
+        snprintf(availability_topic, sizeof(availability_topic), "%s/status", CONFIG_MQTT_BASE_TOPIC);
+        cJSON_AddStringToObject(root, "availability_topic", availability_topic);
+        
+        cJSON_AddStringToObject(root, "device_class", "connectivity");
+        cJSON_AddStringToObject(root, "entity_category", "diagnostic");
+        cJSON_AddStringToObject(root, "payload_on", "ON");
+        cJSON_AddStringToObject(root, "payload_off", "OFF");
+        
+        cJSON_AddItemToObject(root, "device", create_device_info());
+
+        char *payload = cJSON_PrintUnformatted(root);
+        cJSON_Delete(root);
+        
+        if (payload) {
+            esp_mqtt_client_publish(s_mqtt_client, discovery_topic, payload, 0, 1, 1);
+            free(payload);
+            ESP_LOGI(TAG, "Registered diagnostic: WiFi status");
+        }
+    }
+
+    /* Register IP Address sensor */
+    {
+        char discovery_topic[256];
+        snprintf(discovery_topic, sizeof(discovery_topic), 
+                 "%s/sensor/%s_ip_address/config",
+                 CONFIG_HA_DISCOVERY_PREFIX, CONFIG_MQTT_BASE_TOPIC);
+
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddStringToObject(root, "name", "IP Address");
+        
+        char unique_id[64];
+        snprintf(unique_id, sizeof(unique_id), "%s_ip_address", CONFIG_MQTT_BASE_TOPIC);
+        cJSON_AddStringToObject(root, "unique_id", unique_id);
+        
+        char state_topic[128];
+        snprintf(state_topic, sizeof(state_topic), "%s/diagnostic/ip", CONFIG_MQTT_BASE_TOPIC);
+        cJSON_AddStringToObject(root, "state_topic", state_topic);
+        
+        char availability_topic[128];
+        snprintf(availability_topic, sizeof(availability_topic), "%s/status", CONFIG_MQTT_BASE_TOPIC);
+        cJSON_AddStringToObject(root, "availability_topic", availability_topic);
+        
+        cJSON_AddStringToObject(root, "icon", "mdi:ip-network");
+        cJSON_AddStringToObject(root, "entity_category", "diagnostic");
+        
+        cJSON_AddItemToObject(root, "device", create_device_info());
+
+        char *payload = cJSON_PrintUnformatted(root);
+        cJSON_Delete(root);
+        
+        if (payload) {
+            esp_mqtt_client_publish(s_mqtt_client, discovery_topic, payload, 0, 1, 1);
+            free(payload);
+            ESP_LOGI(TAG, "Registered diagnostic: IP Address");
+        }
+    }
+
+    return ESP_OK;
+#else
+    return ESP_OK;
+#endif
+}
+
+esp_err_t mqtt_ha_publish_diagnostics(void)
+{
+    if (!s_connected || s_mqtt_client == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char topic[128];
+    
+    /* Publish Ethernet status */
+    bool eth_connected = ethernet_manager_is_connected();
+    snprintf(topic, sizeof(topic), "%s/diagnostic/ethernet", CONFIG_MQTT_BASE_TOPIC);
+    esp_mqtt_client_publish(s_mqtt_client, topic, eth_connected ? "ON" : "OFF", 0, 1, 0);
+    
+    /* Publish WiFi status */
+    bool wifi_connected = wifi_manager_is_connected();
+    snprintf(topic, sizeof(topic), "%s/diagnostic/wifi", CONFIG_MQTT_BASE_TOPIC);
+    esp_mqtt_client_publish(s_mqtt_client, topic, wifi_connected ? "ON" : "OFF", 0, 1, 0);
+    
+    /* Publish IP Address (prefer Ethernet, fallback to WiFi) */
+    const char *ip = "";
+    if (eth_connected) {
+        ip = ethernet_manager_get_ip();
+    } else if (wifi_connected) {
+        ip = wifi_manager_get_ip();
+    }
+    snprintf(topic, sizeof(topic), "%s/diagnostic/ip", CONFIG_MQTT_BASE_TOPIC);
+    esp_mqtt_client_publish(s_mqtt_client, topic, ip, 0, 1, 0);
+    
+    ESP_LOGD(TAG, "Published diagnostics: eth=%d, wifi=%d, ip=%s", eth_connected, wifi_connected, ip);
+    return ESP_OK;
 }

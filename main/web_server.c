@@ -9,6 +9,7 @@
 #include "nvs_storage.h"
 #include "onewire_temp.h"
 #include "wifi_manager.h"
+#include "ethernet_manager.h"
 #include "log_buffer.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -65,6 +66,14 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     
     extern bool mqtt_ha_is_connected(void);
     cJSON_AddBoolToObject(root, "mqtt_connected", mqtt_ha_is_connected());
+    
+    /* Network connection status */
+    bool eth_connected = ethernet_manager_is_connected();
+    bool wifi_connected = wifi_manager_is_connected();
+    cJSON_AddBoolToObject(root, "ethernet_connected", eth_connected);
+    cJSON_AddBoolToObject(root, "wifi_connected", wifi_connected);
+    cJSON_AddStringToObject(root, "ethernet_ip", eth_connected ? ethernet_manager_get_ip() : "");
+    cJSON_AddStringToObject(root, "wifi_ip", wifi_connected ? wifi_manager_get_ip() : "");
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
