@@ -39,8 +39,6 @@ extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[] asm("_binary_index_html_end");
 extern const uint8_t config_html_start[] asm("_binary_config_html_start");
 extern const uint8_t config_html_end[] asm("_binary_config_html_end");
-extern const uint8_t ota_html_start[] asm("_binary_ota_html_start");
-extern const uint8_t ota_html_end[] asm("_binary_ota_html_end");
 
 /**
  * @brief Handler for GET /
@@ -223,34 +221,69 @@ static esp_err_t config_get_handler(httpd_req_t *req)
 }
 
 /**
- * @brief Handler for GET /ota
+ * @brief Handler for POST /api/ota/check - starts async check
  */
-static esp_err_t ota_page_handler(httpd_req_t *req)
+static esp_err_t api_ota_check_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, (const char *)ota_html_start, ota_html_end - ota_html_start);
+    ESP_LOGI(TAG, "OTA check requested via web UI");
+    cJSON *root = cJSON_CreateObject();
+    
+#if CONFIG_OTA_ENABLED
+    /* Start async check to avoid stack overflow in httpd task */
+    esp_err_t err = ota_check_for_update_async();
+    
+    if (err == ESP_OK) {
+        cJSON_AddBoolToObject(root, "checking", true);
+        cJSON_AddStringToObject(root, "message", "Check started");
+    } else if (err == ESP_ERR_INVALID_STATE) {
+        cJSON_AddBoolToObject(root, "checking", true);
+        cJSON_AddStringToObject(root, "message", "Check already in progress");
+    } else {
+        cJSON_AddBoolToObject(root, "checking", false);
+        cJSON_AddStringToObject(root, "error", "Failed to start check");
+    }
+    cJSON_AddStringToObject(root, "current_version", APP_VERSION);
+#else
+    cJSON_AddBoolToObject(root, "checking", false);
+    cJSON_AddStringToObject(root, "current_version", APP_VERSION);
+    cJSON_AddStringToObject(root, "error", "OTA disabled");
+#endif
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    
     return ESP_OK;
 }
 
 /**
- * @brief Handler for POST /api/ota/check
+ * @brief Handler for GET /api/ota/status - poll for check result
  */
-static esp_err_t api_ota_check_handler(httpd_req_t *req)
+static esp_err_t api_ota_status_handler(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
     
 #if CONFIG_OTA_ENABLED
-    bool update_available = false;
+    int result = ota_get_check_result();
+    bool checking = ota_check_in_progress();
+    bool update_available = ota_is_update_available();
     char latest_version[32] = {0};
-    
-    esp_err_t err = ota_check_for_update();
-    update_available = ota_is_update_available();
     ota_get_latest_version(latest_version, sizeof(latest_version));
     
+    ESP_LOGI(TAG, "OTA status: checking=%d, result=%d, update=%d, version=%s",
+             checking, result, update_available, latest_version);
+    
+    cJSON_AddBoolToObject(root, "checking", checking);
+    cJSON_AddNumberToObject(root, "result", result);  /* 0=in progress, 1=complete, -1=failed */
     cJSON_AddBoolToObject(root, "update_available", update_available);
     cJSON_AddStringToObject(root, "current_version", APP_VERSION);
     cJSON_AddStringToObject(root, "latest_version", latest_version);
 #else
+    cJSON_AddBoolToObject(root, "checking", false);
+    cJSON_AddIntToObject(root, "result", -1);
     cJSON_AddBoolToObject(root, "update_available", false);
     cJSON_AddStringToObject(root, "current_version", APP_VERSION);
     cJSON_AddStringToObject(root, "error", "OTA disabled");
@@ -982,6 +1015,13 @@ esp_err_t web_server_start(void)
     };
     REGISTER_URI(ota_check_uri);
 
+    httpd_uri_t ota_status_uri = {
+        .uri = "/api/ota/status",
+        .method = HTTP_GET,
+        .handler = api_ota_status_handler,
+    };
+    REGISTER_URI(ota_status_uri);
+
     httpd_uri_t ota_update_uri = {
         .uri = "/api/ota/update",
         .method = HTTP_POST,
@@ -1003,14 +1043,6 @@ esp_err_t web_server_start(void)
         .handler = config_get_handler,
     };
     REGISTER_URI(config_uri);
-
-    /* OTA Update page */
-    httpd_uri_t ota_page_uri = {
-        .uri = "/ota",
-        .method = HTTP_GET,
-        .handler = ota_page_handler,
-    };
-    REGISTER_URI(ota_page_uri);
 
     /* WiFi scan endpoint */
     httpd_uri_t wifi_scan_uri = {
