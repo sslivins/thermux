@@ -154,7 +154,7 @@ esp_err_t mqtt_ha_publish_temperature(const char *sensor_id, const char *friendl
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "MQTT: %s = %.2f°C", friendly_name, temperature);
+    ESP_LOGD(TAG, "Published %s: %.2f°C", friendly_name, temperature);
     return ESP_OK;
 }
 

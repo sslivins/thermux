@@ -140,19 +140,27 @@ esp_err_t sensor_manager_read_all(void)
 
 esp_err_t sensor_manager_publish_all(void)
 {
+    int64_t start = esp_timer_get_time();
+    int published = 0;
+    
     for (int i = 0; i < s_sensor_count; i++) {
         if (s_sensors[i].hw_sensor.valid) {
             const char *name = s_sensors[i].has_friendly_name ? 
                                s_sensors[i].friendly_name : s_sensors[i].address_str;
             
-            mqtt_ha_publish_temperature(s_sensors[i].address_str, 
-                                        name,
-                                        s_sensors[i].hw_sensor.temperature);
+            if (mqtt_ha_publish_temperature(s_sensors[i].address_str, 
+                                            name,
+                                            s_sensors[i].hw_sensor.temperature) == ESP_OK) {
+                published++;
+            }
         }
     }
     
     /* Also publish diagnostic data (network status) */
     mqtt_ha_publish_diagnostics();
+    
+    int64_t elapsed_ms = (esp_timer_get_time() - start) / 1000;
+    ESP_LOGI(TAG, "Published %d sensors via MQTT in %lld ms", published, elapsed_ms);
     
     return ESP_OK;
 }
