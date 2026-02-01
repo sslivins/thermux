@@ -11,8 +11,6 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-#define DEFAULT_BUFFER_SIZE 4096
-
 static char *s_buffer = NULL;
 static size_t s_buffer_size = 0;
 static size_t s_head = 0;  /* Write position */
@@ -77,7 +75,7 @@ static int log_vprintf(const char *fmt, va_list args)
 esp_err_t log_buffer_init(size_t buffer_size)
 {
     if (buffer_size == 0) {
-        buffer_size = DEFAULT_BUFFER_SIZE;
+        buffer_size = LOG_BUFFER_SIZE;
     }
     
     s_buffer = malloc(buffer_size);

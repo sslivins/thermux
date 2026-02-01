@@ -15,7 +15,7 @@ static const char *NVS_NAMESPACE = "temp_monitor";
 
 esp_err_t nvs_storage_init(void)
 {
-    ESP_LOGI(TAG, "Initializing NVS storage");
+    ESP_LOGD(TAG, "Initializing NVS storage");
     return ESP_OK;
 }
 
@@ -52,7 +52,7 @@ esp_err_t nvs_storage_save_sensor_name(const uint8_t *sensor_address, const char
     err = nvs_commit(handle);
     nvs_close(handle);
 
-    ESP_LOGI(TAG, "Saved sensor name: %s -> %s", key, friendly_name);
+    ESP_LOGD(TAG, "Saved sensor name: %s -> %s", key, friendly_name);
     return err;
 }
 
@@ -223,7 +223,7 @@ esp_err_t nvs_storage_save_sensor_settings(uint32_t read_interval_ms, uint32_t p
     err = nvs_commit(handle);
     nvs_close(handle);
 
-    ESP_LOGI(TAG, "Saved sensor settings: read=%lums, publish=%lums, resolution=%d bits",
+    ESP_LOGD(TAG, "Saved sensor settings: read=%lums, publish=%lums, resolution=%d bits",
              read_interval_ms, publish_interval_ms, resolution);
     return err;
 }

@@ -299,12 +299,27 @@
             <div class="section-title">📋 System Logs</div>
             <div class="btn-row" style="margin-bottom: 15px;">
                 <button class="btn btn-primary" onclick="refreshLogs()">🔄 Refresh</button>
+                <button class="btn btn-secondary" id="copy-logs-btn" onclick="copyLogs()" disabled>📋 Copy</button>
+                <button class="btn btn-secondary" id="download-logs-btn" onclick="downloadLogs()" disabled>💾 Download</button>
                 <button class="btn btn-secondary" onclick="clearLogs()">🗑️ Clear</button>
                 <label style="display: flex; align-items: center; gap: 8px; color: #ccc; cursor: pointer;">
                     <input type="checkbox" id="auto-refresh" onchange="toggleAutoRefresh()" style="width: auto;">
                     Auto-refresh
                 </label>
             </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <div style="display: flex; align-items: center; gap: 15px;">
+                    <label style="color: #ccc; white-space: nowrap;">Log Level:</label>
+                    <select id="log-level" onchange="setLogLevel(this.value)" style="flex: 0 0 auto; width: auto;">
+                        <option value="1">Error</option>
+                        <option value="2">Warning</option>
+                        <option value="3" selected>Info</option>
+                        <option value="4">Debug</option>
+                    </select>
+                </div>
+                <div class="form-hint">Set to Debug for troubleshooting, Info for normal operation</div>
+            </div>
+            <div class="form-hint" style="margin-bottom: 10px;">Buffer: 16 KB circular (oldest logs are overwritten)</div>
             <pre id="log-output" style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; font-family: monospace; font-size: 0.8em; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; color: #aaa;">Click "Refresh" to load logs...</pre>
         </div>
 
@@ -833,8 +848,15 @@
                 const output = document.getElementById('log-output');
                 output.textContent = logs || '(No logs yet)';
                 output.scrollTop = output.scrollHeight;
+                
+                /* Enable/disable copy and download buttons based on log content */
+                const hasLogs = logs && logs.length > 0;
+                document.getElementById('copy-logs-btn').disabled = !hasLogs;
+                document.getElementById('download-logs-btn').disabled = !hasLogs;
             } catch (err) {
                 document.getElementById('log-output').textContent = 'Error loading logs';
+                document.getElementById('copy-logs-btn').disabled = true;
+                document.getElementById('download-logs-btn').disabled = true;
             }
         }
 
@@ -842,10 +864,68 @@
             try {
                 await fetch('/api/logs/clear', { method: 'POST' });
                 document.getElementById('log-output').textContent = '(Logs cleared)';
+                document.getElementById('copy-logs-btn').disabled = true;
+                document.getElementById('download-logs-btn').disabled = true;
                 showToast('Logs cleared');
             } catch (err) {
                 showToast('Failed to clear logs', true);
             }
+        }
+
+        function copyLogs() {
+            const logs = document.getElementById('log-output').textContent;
+            
+            /* Try modern clipboard API first, fall back to execCommand for HTTP contexts */
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(logs).then(() => {
+                    showToast('Logs copied to clipboard');
+                }).catch(() => {
+                    fallbackCopy(logs);
+                });
+            } else {
+                fallbackCopy(logs);
+            }
+        }
+        
+        function fallbackCopy(text) {
+            /* Fallback for non-HTTPS contexts (like ESP32 local HTTP) */
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.left = '-9999px';
+            textarea.style.top = '0';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            
+            try {
+                const success = document.execCommand('copy');
+                if (success) {
+                    showToast('Logs copied to clipboard');
+                } else {
+                    showToast('Failed to copy logs', true);
+                }
+            } catch (err) {
+                showToast('Failed to copy logs', true);
+            }
+            
+            document.body.removeChild(textarea);
+        }
+
+        function downloadLogs() {
+            const logs = document.getElementById('log-output').textContent;
+            const blob = new Blob([logs], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const now = new Date();
+            const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            a.download = 'esp32-temp-monitor-logs-' + timestamp + '.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showToast('Logs downloaded');
         }
 
         function toggleAutoRefresh() {
@@ -858,6 +938,34 @@
                     clearInterval(logRefreshInterval);
                     logRefreshInterval = null;
                 }
+            }
+        }
+
+        async function loadLogLevel() {
+            try {
+                const resp = await fetch('/api/logs/level');
+                const data = await resp.json();
+                document.getElementById('log-level').value = data.level;
+            } catch (err) {
+                /* Ignore errors on page load */
+            }
+        }
+
+        async function setLogLevel(level) {
+            try {
+                const resp = await fetch('/api/logs/level', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ level: parseInt(level) })
+                });
+                if (resp.ok) {
+                    const levelNames = ['None', 'Error', 'Warning', 'Info', 'Debug', 'Verbose'];
+                    showToast('Log level set to ' + levelNames[level]);
+                } else {
+                    showToast('Failed to set log level', true);
+                }
+            } catch (err) {
+                showToast('Failed to set log level', true);
             }
         }
 
@@ -885,6 +993,7 @@
         }
 
         loadConfig();
+        loadLogLevel();
     </script>
 </body>
 </html>

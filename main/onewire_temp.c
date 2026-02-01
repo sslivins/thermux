@@ -25,7 +25,7 @@ static int s_resolution = 12;
 
 esp_err_t onewire_temp_init(int gpio_num)
 {
-    ESP_LOGI(TAG, "Initializing 1-Wire bus on GPIO %d", gpio_num);
+    ESP_LOGD(TAG, "Initializing 1-Wire bus on GPIO %d", gpio_num);
 
     /* Configure 1-Wire bus */
     onewire_bus_config_t bus_config = {
@@ -42,13 +42,13 @@ esp_err_t onewire_temp_init(int gpio_num)
         return err;
     }
 
-    ESP_LOGI(TAG, "1-Wire bus initialized successfully");
+    ESP_LOGD(TAG, "1-Wire bus initialized successfully");
     return ESP_OK;
 }
 
 esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *found_count)
 {
-    ESP_LOGI(TAG, "Scanning for DS18B20 sensors...");
+    ESP_LOGD(TAG, "Scanning for DS18B20 sensors...");
     
     int count = 0;
     onewire_device_iter_handle_t iter = NULL;
@@ -103,7 +103,7 @@ esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *fou
 
         char addr_str[17];
         onewire_address_to_string(sensors[count].address, addr_str);
-        ESP_LOGI(TAG, "Found DS18B20: %s", addr_str);
+        ESP_LOGD(TAG, "Found DS18B20: %s", addr_str);
 
         count++;
     }
@@ -236,6 +236,6 @@ esp_err_t onewire_temp_set_resolution(int bits)
         }
     }
     
-    ESP_LOGI(TAG, "Resolution set to %d bits", bits);
+    ESP_LOGD(TAG, "Resolution set to %d bits", bits);
     return ESP_OK;
 }

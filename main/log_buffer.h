@@ -9,9 +9,12 @@
 #include "esp_err.h"
 #include <stddef.h>
 
+/** @brief Default log buffer size (16KB) */
+#define LOG_BUFFER_SIZE 16384
+
 /**
  * @brief Initialize log buffer and hook into ESP logging
- * @param buffer_size Size of circular buffer in bytes (default 4096 if 0)
+ * @param buffer_size Size of circular buffer in bytes (default LOG_BUFFER_SIZE if 0)
  */
 esp_err_t log_buffer_init(size_t buffer_size);
 

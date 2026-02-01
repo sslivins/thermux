@@ -36,7 +36,7 @@ EventGroupHandle_t network_event_group;
 const int NETWORK_CONNECTED_BIT = BIT0;
 
 /* Application version - update for each release */
-const char *APP_VERSION = "1.0.23";
+const char *APP_VERSION = "1.0.24";
 
 /* Runtime sensor settings (can be changed via web UI) */
 static uint32_t s_read_interval_ms = CONFIG_SENSOR_READ_INTERVAL_MS;
@@ -48,12 +48,12 @@ uint32_t get_sensor_publish_interval(void) { return s_publish_interval_ms; }
 
 void set_sensor_read_interval(uint32_t ms) { 
     s_read_interval_ms = ms; 
-    ESP_LOGI(TAG, "Read interval set to %lu ms", ms);
+    ESP_LOGD(TAG, "Read interval set to %lu ms", ms);
 }
 
 void set_sensor_publish_interval(uint32_t ms) { 
     s_publish_interval_ms = ms; 
-    ESP_LOGI(TAG, "Publish interval set to %lu ms", ms);
+    ESP_LOGD(TAG, "Publish interval set to %lu ms", ms);
 }
 
 /**
@@ -88,8 +88,8 @@ static esp_err_t init_mdns(void)
     /* Add custom service type for easy discovery of all temp monitors */
     mdns_service_add("Temperature Monitor", "_tempmon", "_tcp", CONFIG_WEB_SERVER_PORT, http_txt, 2);
     
-    ESP_LOGI(TAG, "mDNS hostname: %s.local", hostname);
-    ESP_LOGI(TAG, "mDNS services: _http._tcp, _tempmon._tcp");
+    ESP_LOGD(TAG, "mDNS hostname: %s.local", hostname);
+    ESP_LOGD(TAG, "mDNS services: _http._tcp, _tempmon._tcp");
     return ESP_OK;
 }
 
@@ -115,7 +115,7 @@ static void network_event_handler(void *arg, esp_event_base_t event_base,
  */
 static void temperature_task(void *pvParameters)
 {
-    ESP_LOGI(TAG, "Temperature task started");
+    ESP_LOGD(TAG, "Temperature task started");
     
     while (1) {
         /* Read all connected sensors */
@@ -130,7 +130,7 @@ static void temperature_task(void *pvParameters)
  */
 static void mqtt_publish_task(void *pvParameters)
 {
-    ESP_LOGI(TAG, "MQTT publish task started");
+    ESP_LOGD(TAG, "MQTT publish task started");
     
     /* Wait for MQTT to connect */
     vTaskDelay(pdMS_TO_TICKS(5000));
@@ -149,7 +149,7 @@ static void mqtt_publish_task(void *pvParameters)
  */
 static void ota_check_task(void *pvParameters)
 {
-    ESP_LOGI(TAG, "OTA check task started");
+    ESP_LOGD(TAG, "OTA check task started");
     
     /* Initial delay before first check */
     vTaskDelay(pdMS_TO_TICKS(60000));
@@ -169,8 +169,8 @@ static void ota_check_task(void *pvParameters)
 static void watchdog_task(void *pvParameters)
 {
     while (1) {
-        /* Log heap status periodically */
-        ESP_LOGI(TAG, "Free heap: %lu bytes, minimum: %lu bytes",
+        /* Log heap status periodically (debug level - not shown by default) */
+        ESP_LOGD(TAG, "Free heap: %lu bytes, minimum: %lu bytes",
                  esp_get_free_heap_size(),
                  esp_get_minimum_free_heap_size());
         
@@ -181,7 +181,22 @@ static void watchdog_task(void *pvParameters)
 void app_main(void)
 {
     /* Initialize log buffer first to capture all logs */
-    log_buffer_init(4096);  /* 4KB ring buffer */
+    log_buffer_init(LOG_BUFFER_SIZE);
+    
+    /* Set default runtime log level to INFO (compile-time is DEBUG to allow switching) */
+    esp_log_level_set("*", ESP_LOG_INFO);
+    
+    /* Quiet down noisy ESP-IDF components - set to WARN level
+       This reduces startup spam while keeping important messages */
+    esp_log_level_set("wifi", ESP_LOG_WARN);
+    esp_log_level_set("wifi_init", ESP_LOG_WARN);
+    esp_log_level_set("esp_netif_handlers", ESP_LOG_WARN);
+    esp_log_level_set("esp_netif_lwip", ESP_LOG_WARN);
+    esp_log_level_set("esp-tls", ESP_LOG_WARN);
+    esp_log_level_set("esp-tls-mbedtls", ESP_LOG_WARN);
+    esp_log_level_set("esp_https_ota", ESP_LOG_WARN);
+    esp_log_level_set("HTTP_CLIENT", ESP_LOG_WARN);
+    esp_log_level_set("esp-x509-crt-bundle", ESP_LOG_WARN);
     
     ESP_LOGI(TAG, "=================================");
     ESP_LOGI(TAG, "ESP32-POE Temperature Monitor");
@@ -219,11 +234,11 @@ void app_main(void)
         if (nvs_storage_load_sensor_settings(&read_ms, &publish_ms, &resolution) == ESP_OK) {
             s_read_interval_ms = read_ms;
             s_publish_interval_ms = publish_ms;
-            ESP_LOGI(TAG, "Loaded sensor settings: read=%lums, publish=%lums, resolution=%d",
+            ESP_LOGD(TAG, "Loaded sensor settings: read=%lums, publish=%lums, resolution=%d",
                      read_ms, publish_ms, resolution);
             /* Resolution will be applied after onewire_temp_init */
         } else {
-            ESP_LOGI(TAG, "Using default sensor settings");
+            ESP_LOGD(TAG, "Using default sensor settings");
         }
     }
 
@@ -261,7 +276,7 @@ void app_main(void)
 #endif
 
     /* Wait for network connection */
-    ESP_LOGI(TAG, "Waiting for network connection...");
+    ESP_LOGD(TAG, "Waiting for network connection...");
     xEventGroupWaitBits(network_event_group, NETWORK_CONNECTED_BIT,
                         pdFALSE, pdTRUE, portMAX_DELAY);
     ESP_LOGI(TAG, "Network connected!");
@@ -274,7 +289,7 @@ void app_main(void)
 
     /* Start web server */
     ESP_ERROR_CHECK(web_server_start());
-    ESP_LOGI(TAG, "Web server started on port %d", CONFIG_WEB_SERVER_PORT);
+    ESP_LOGD(TAG, "Web server started on port %d", CONFIG_WEB_SERVER_PORT);
 
 #if CONFIG_OTA_ENABLED
     /* Initialize OTA updater */

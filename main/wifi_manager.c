@@ -37,7 +37,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         if (!s_scanning && s_retry_num < WIFI_MAXIMUM_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGI(TAG, "Retry to connect to the AP (%d/%d)", s_retry_num, WIFI_MAXIMUM_RETRY);
+            ESP_LOGD(TAG, "Retry to connect to the AP (%d/%d)", s_retry_num, WIFI_MAXIMUM_RETRY);
         } else if (!s_scanning) {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
             ESP_LOGI(TAG, "Connect to the AP fail");
@@ -55,7 +55,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 
 esp_err_t wifi_manager_init(void)
 {
-    ESP_LOGI(TAG, "Initializing WiFi");
+    ESP_LOGD(TAG, "Initializing WiFi");
 
     s_wifi_event_group = xEventGroupCreate();
 
@@ -93,13 +93,13 @@ esp_err_t wifi_manager_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
 
-    ESP_LOGI(TAG, "WiFi initialization complete");
+    ESP_LOGD(TAG, "WiFi initialization complete");
     return ESP_OK;
 }
 
 esp_err_t wifi_manager_start(void)
 {
-    ESP_LOGI(TAG, "Starting WiFi");
+    ESP_LOGD(TAG, "Starting WiFi");
     s_retry_num = 0;
     return esp_wifi_start();
 }
@@ -144,7 +144,7 @@ esp_err_t wifi_manager_set_credentials(const char *ssid, const char *password)
 
 esp_err_t wifi_manager_scan(wifi_ap_record_t *ap_records, uint16_t max_records, uint16_t *found_count)
 {
-    ESP_LOGI(TAG, "Starting WiFi scan...");
+    ESP_LOGD(TAG, "Starting WiFi scan...");
     
     /* Set scanning flag to prevent auto-connect in event handler */
     s_scanning = true;
@@ -163,7 +163,7 @@ esp_err_t wifi_manager_scan(wifi_ap_record_t *ap_records, uint16_t max_records, 
     err = esp_wifi_start();
     if (err == ESP_OK) {
         was_stopped = true;
-        ESP_LOGI(TAG, "WiFi started temporarily for scan");
+        ESP_LOGD(TAG, "WiFi started temporarily for scan");
     }
     
     vTaskDelay(pdMS_TO_TICKS(100)); /* Brief delay for WiFi to stabilize */
@@ -193,7 +193,7 @@ esp_err_t wifi_manager_scan(wifi_ap_record_t *ap_records, uint16_t max_records, 
     /* Get scan results */
     uint16_t ap_count = 0;
     esp_wifi_scan_get_ap_num(&ap_count);
-    ESP_LOGI(TAG, "WiFi scan found %d networks", ap_count);
+    ESP_LOGD(TAG, "WiFi scan found %d networks", ap_count);
     
     if (ap_count > max_records) {
         ap_count = max_records;
@@ -212,7 +212,7 @@ esp_err_t wifi_manager_scan(wifi_ap_record_t *ap_records, uint16_t max_records, 
     /* Stop WiFi if we started it just for the scan */
     if (was_stopped) {
         esp_wifi_stop();
-        ESP_LOGI(TAG, "WiFi stopped after scan");
+        ESP_LOGD(TAG, "WiFi stopped after scan");
     }
     
     s_scanning = false;

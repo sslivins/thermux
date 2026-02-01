@@ -68,7 +68,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 
 esp_err_t mqtt_ha_init(void)
 {
-    ESP_LOGI(TAG, "Initializing MQTT client");
+    ESP_LOGD(TAG, "Initializing MQTT client");
 
     /* Try to load config from NVS, fall back to menuconfig defaults */
     char broker_uri[128] = {0};
@@ -108,7 +108,7 @@ esp_err_t mqtt_ha_init(void)
     esp_mqtt_client_register_event(s_mqtt_client, ESP_EVENT_ANY_ID, 
                                    mqtt_event_handler, NULL);
 
-    ESP_LOGI(TAG, "Starting MQTT client, broker: %s", broker_uri);
+    ESP_LOGD(TAG, "Starting MQTT client, broker: %s", broker_uri);
     return esp_mqtt_client_start(s_mqtt_client);
 }
 
@@ -228,7 +228,7 @@ esp_err_t mqtt_ha_register_sensor(const char *sensor_id, const char *friendly_na
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Registered sensor with HA: %s (%s)", friendly_name, sensor_id);
+    ESP_LOGD(TAG, "Registered sensor with HA: %s (%s)", friendly_name, sensor_id);
     return ESP_OK;
 #else
     return ESP_OK;
@@ -252,7 +252,7 @@ esp_err_t mqtt_ha_publish_status(bool online)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Published status: %s", payload);
+    ESP_LOGD(TAG, "Published status: %s", payload);
     return ESP_OK;
 }
 
@@ -271,7 +271,7 @@ esp_err_t mqtt_ha_publish_discovery_all(void)
     /* Register diagnostic entities */
     mqtt_ha_register_diagnostic_entities();
     
-    ESP_LOGI(TAG, "Published discovery for %d sensors + diagnostics", count);
+    ESP_LOGD(TAG, "Published discovery for %d sensors + diagnostics", count);
     return ESP_OK;
 #else
     return ESP_OK;
@@ -338,7 +338,7 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void)
         if (payload) {
             esp_mqtt_client_publish(s_mqtt_client, discovery_topic, payload, 0, 1, 1);
             free(payload);
-            ESP_LOGI(TAG, "Registered diagnostic: Ethernet status");
+            ESP_LOGD(TAG, "Registered diagnostic: Ethernet status");
         }
     }
 
@@ -377,7 +377,7 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void)
         if (payload) {
             esp_mqtt_client_publish(s_mqtt_client, discovery_topic, payload, 0, 1, 1);
             free(payload);
-            ESP_LOGI(TAG, "Registered diagnostic: WiFi status");
+            ESP_LOGD(TAG, "Registered diagnostic: WiFi status");
         }
     }
 
@@ -414,7 +414,7 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void)
         if (payload) {
             esp_mqtt_client_publish(s_mqtt_client, discovery_topic, payload, 0, 1, 1);
             free(payload);
-            ESP_LOGI(TAG, "Registered diagnostic: IP Address");
+            ESP_LOGD(TAG, "Registered diagnostic: IP Address");
         }
     }
 

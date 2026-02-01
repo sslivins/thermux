@@ -160,7 +160,7 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
         }
     }
 
-    ESP_LOGI("web_server", "Set name request for address: '%s'", address);
+    ESP_LOGD("web_server", "Set name request for address: '%s'", address);
 
     if (strlen(address) == 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid address");
@@ -176,7 +176,7 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
     }
     content[ret] = '\0';
 
-    ESP_LOGI("web_server", "Request body: %s", content);
+    ESP_LOGD("web_server", "Request body: %s", content);
 
     /* Parse JSON */
     cJSON *root = cJSON_Parse(content);
@@ -193,7 +193,7 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
         strncpy(friendly_name, name_json->valuestring, sizeof(friendly_name) - 1);
     }
 
-    ESP_LOGI("web_server", "Setting name for %s: '%s'", address, friendly_name);
+    ESP_LOGD("web_server", "Setting name for %s: '%s'", address, friendly_name);
 
     cJSON_Delete(root);
 
@@ -234,7 +234,7 @@ static esp_err_t config_get_handler(httpd_req_t *req)
  */
 static esp_err_t api_ota_check_handler(httpd_req_t *req)
 {
-    ESP_LOGI(TAG, "OTA check requested via web UI");
+    ESP_LOGD(TAG, "OTA check requested via web UI");
     cJSON *root = cJSON_CreateObject();
     
 #if CONFIG_OTA_ENABLED
@@ -288,7 +288,7 @@ static esp_err_t api_ota_status_handler(httpd_req_t *req)
     int received = 0, total = 0;
     ota_get_download_stats(&received, &total);
     
-    ESP_LOGI(TAG, "OTA status: checking=%d, result=%d, update=%d, version=%s, update_state=%d, progress=%d%%",
+    ESP_LOGD(TAG, "OTA status: checking=%d, result=%d, update=%d, version=%s, update_state=%d, progress=%d%%",
              checking, result, update_available, latest_version, update_state, download_progress);
     
     cJSON_AddBoolToObject(root, "checking", checking);
@@ -417,7 +417,7 @@ static esp_err_t api_ota_upload_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
     
-    ESP_LOGI(TAG, "Writing to partition: %s at 0x%lx", update_partition->label, update_partition->address);
+    ESP_LOGD(TAG, "Writing to partition: %s at 0x%lx", update_partition->label, update_partition->address);
     
     /* Receive and write firmware data */
     while (remaining > 0) {
@@ -465,7 +465,7 @@ static esp_err_t api_ota_upload_handler(httpd_req_t *req)
         remaining -= recv_len;
         
         if (received % 102400 == 0) {
-            ESP_LOGI(TAG, "Upload progress: %d/%d bytes", received, req->content_len);
+            ESP_LOGD(TAG, "Upload progress: %d/%d bytes", received, req->content_len);
         }
     }
     
@@ -576,13 +576,13 @@ static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
 static esp_err_t api_logs_get_handler(httpd_req_t *req)
 {
     /* Allocate buffer for logs (same size as ring buffer) */
-    char *log_data = malloc(4096);
+    char *log_data = malloc(LOG_BUFFER_SIZE);
     if (!log_data) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
         return ESP_FAIL;
     }
     
-    size_t len = log_buffer_get(log_data, 4096);
+    size_t len = log_buffer_get(log_data, LOG_BUFFER_SIZE);
     
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, log_data, len);
@@ -597,6 +597,75 @@ static esp_err_t api_logs_get_handler(httpd_req_t *req)
 static esp_err_t api_logs_clear_handler(httpd_req_t *req)
 {
     log_buffer_clear();
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for GET /api/logs/level - returns current log level
+ */
+static esp_err_t api_logs_level_get_handler(httpd_req_t *req)
+{
+    /* Get current log level for "main" tag (representative of app) */
+    esp_log_level_t level = esp_log_level_get("main");
+    
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "level", (int)level);
+    
+    /* Also provide human-readable name */
+    const char *level_names[] = {"none", "error", "warn", "info", "debug", "verbose"};
+    cJSON_AddStringToObject(root, "level_name", level_names[level]);
+    
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/logs/level - sets log level
+ * Body: {"level": 3} where 0=none, 1=error, 2=warn, 3=info, 4=debug, 5=verbose
+ */
+static esp_err_t api_logs_level_post_handler(httpd_req_t *req)
+{
+    char content[64];
+    int received = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No content");
+        return ESP_FAIL;
+    }
+    content[received] = '\0';
+    
+    cJSON *root = cJSON_Parse(content);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+    
+    cJSON *level_json = cJSON_GetObjectItem(root, "level");
+    if (!level_json || !cJSON_IsNumber(level_json)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing level");
+        return ESP_FAIL;
+    }
+    
+    int level = level_json->valueint;
+    cJSON_Delete(root);
+    
+    if (level < 0 || level > 5) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid level (0-5)");
+        return ESP_FAIL;
+    }
+    
+    /* Set log level for all components */
+    esp_log_level_set("*", (esp_log_level_t)level);
+    
+    ESP_LOGI(TAG, "Log level changed to %d", level);
     
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"success\":true}");
@@ -799,7 +868,7 @@ static esp_err_t api_config_mqtt_post_handler(httpd_req_t *req)
  */
 static esp_err_t api_mqtt_reconnect_handler(httpd_req_t *req)
 {
-    ESP_LOGI(TAG, "MQTT reconnect requested");
+    ESP_LOGD(TAG, "MQTT reconnect requested");
     
     /* Stop and reinitialize MQTT with new settings */
     mqtt_ha_stop();
@@ -975,7 +1044,7 @@ static esp_err_t api_system_factory_reset_handler(httpd_req_t *req)
 
 esp_err_t web_server_start(void)
 {
-    ESP_LOGI(TAG, "Starting web server on port %d", CONFIG_WEB_SERVER_PORT);
+    ESP_LOGD(TAG, "Starting web server on port %d", CONFIG_WEB_SERVER_PORT);
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = CONFIG_WEB_SERVER_PORT;
@@ -1091,6 +1160,20 @@ esp_err_t web_server_start(void)
     };
     REGISTER_URI(logs_clear_uri);
 
+    httpd_uri_t logs_level_get_uri = {
+        .uri = "/api/logs/level",
+        .method = HTTP_GET,
+        .handler = api_logs_level_get_handler,
+    };
+    REGISTER_URI(logs_level_get_uri);
+
+    httpd_uri_t logs_level_post_uri = {
+        .uri = "/api/logs/level",
+        .method = HTTP_POST,
+        .handler = api_logs_level_post_handler,
+    };
+    REGISTER_URI(logs_level_post_uri);
+
     /* WiFi config endpoints */
     httpd_uri_t wifi_config_get_uri = {
         .uri = "/api/config/wifi",
@@ -1158,7 +1241,7 @@ esp_err_t web_server_start(void)
     };
     REGISTER_URI(factory_reset_uri);
 
-    ESP_LOGI(TAG, "Web server started");
+    ESP_LOGD(TAG, "Web server started");
     return ESP_OK;
 }
 

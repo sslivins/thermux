@@ -47,7 +47,7 @@ static void eth_event_handler(void *arg, esp_event_base_t event_base,
     case ETHERNET_EVENT_CONNECTED:
         esp_eth_ioctl(eth_handle, ETH_CMD_G_MAC_ADDR, mac_addr);
         ESP_LOGI(TAG, "Ethernet Link Up");
-        ESP_LOGI(TAG, "Ethernet HW Addr %02x:%02x:%02x:%02x:%02x:%02x",
+        ESP_LOGD(TAG, "Ethernet HW Addr %02x:%02x:%02x:%02x:%02x:%02x",
                  mac_addr[0], mac_addr[1], mac_addr[2], 
                  mac_addr[3], mac_addr[4], mac_addr[5]);
         break;
@@ -56,10 +56,10 @@ static void eth_event_handler(void *arg, esp_event_base_t event_base,
         s_connected = false;
         break;
     case ETHERNET_EVENT_START:
-        ESP_LOGI(TAG, "Ethernet Started");
+        ESP_LOGD(TAG, "Ethernet Started");
         break;
     case ETHERNET_EVENT_STOP:
-        ESP_LOGI(TAG, "Ethernet Stopped");
+        ESP_LOGD(TAG, "Ethernet Stopped");
         s_connected = false;
         break;
     default:
@@ -84,7 +84,7 @@ static void got_ip_event_handler(void *arg, esp_event_base_t event_base,
 
 esp_err_t ethernet_manager_init(void)
 {
-    ESP_LOGI(TAG, "Initializing Ethernet for ESP32-POE-ISO");
+    ESP_LOGD(TAG, "Initializing Ethernet for ESP32-POE-ISO");
 
     /* Enable PHY power (GPIO12 on POE-ISO) */
     gpio_reset_pin(ETH_PHY_RST_GPIO);
@@ -128,7 +128,7 @@ esp_err_t ethernet_manager_init(void)
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, 
                                                 &got_ip_event_handler, NULL));
 
-    ESP_LOGI(TAG, "Ethernet initialization complete");
+    ESP_LOGD(TAG, "Ethernet initialization complete");
     return ESP_OK;
 }
 
@@ -139,7 +139,7 @@ esp_err_t ethernet_manager_start(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(TAG, "Starting Ethernet");
+    ESP_LOGD(TAG, "Starting Ethernet");
     return esp_eth_start(s_eth_handle);
 }
 
