@@ -41,12 +41,18 @@ static char s_session_token[33] = "";  /* Random hex token */
 static int64_t s_session_expiry = 0;   /* Session expiry time (esp_timer ticks) */
 #define SESSION_TIMEOUT_MS (24 * 60 * 60 * 1000)  /* 24 hours */
 
+/* API key for stateless API access */
+static char s_api_key[65] = "";  /* 32 hex chars (128-bit key) */
+
 extern const char *APP_VERSION;
 
 /* Forward declarations for reconfiguration */
 extern esp_err_t mqtt_ha_stop(void);
 extern esp_err_t mqtt_ha_init(void);
 extern esp_err_t mqtt_ha_start(void);
+
+/* Forward declarations */
+static void generate_api_key(void);
 
 /* Embedded HTML files (minified at build time) */
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
@@ -61,7 +67,8 @@ static void load_auth_config(void)
 {
     esp_err_t err = nvs_storage_load_auth_config(&s_auth_enabled, s_auth_username, 
                                                   sizeof(s_auth_username), s_auth_password, 
-                                                  sizeof(s_auth_password));
+                                                  sizeof(s_auth_password), s_api_key,
+                                                  sizeof(s_api_key));
     if (err != ESP_OK) {
         /* No config saved, use Kconfig defaults if enabled */
 #if CONFIG_WEB_AUTH_ENABLED
@@ -75,6 +82,14 @@ static void load_auth_config(void)
 #endif
     } else {
         ESP_LOGI(TAG, "Loaded auth config (enabled=%d)", s_auth_enabled);
+    }
+    
+    /* Generate API key if none exists */
+    if (s_auth_enabled && strlen(s_api_key) == 0) {
+        generate_api_key();
+        ESP_LOGI(TAG, "Generated new API key");
+        /* Save the generated key */
+        nvs_storage_save_auth_config(s_auth_enabled, s_auth_username, s_auth_password, s_api_key);
     }
 }
 
@@ -91,6 +106,23 @@ static void generate_session_token(void)
              (unsigned long)rnd[0], (unsigned long)rnd[1], 
              (unsigned long)rnd[2], (unsigned long)rnd[3]);
     s_session_expiry = esp_timer_get_time() / 1000 + SESSION_TIMEOUT_MS;
+}
+
+/**
+ * @brief Generate a random API key (256-bit)
+ */
+static void generate_api_key(void)
+{
+    uint32_t rnd[8];
+    for (int i = 0; i < 8; i++) {
+        rnd[i] = esp_random();
+    }
+    snprintf(s_api_key, sizeof(s_api_key), 
+             "%08lx%08lx%08lx%08lx%08lx%08lx%08lx%08lx",
+             (unsigned long)rnd[0], (unsigned long)rnd[1], 
+             (unsigned long)rnd[2], (unsigned long)rnd[3],
+             (unsigned long)rnd[4], (unsigned long)rnd[5],
+             (unsigned long)rnd[6], (unsigned long)rnd[7]);
 }
 
 /**
@@ -174,7 +206,38 @@ static bool check_session_auth(httpd_req_t *req)
 }
 
 /**
+ * @brief Check if API key from header is valid
+ */
+static bool is_api_key_valid(httpd_req_t *req)
+{
+    if (strlen(s_api_key) == 0) {
+        return false;  /* No API key configured */
+    }
+    
+    /* Check X-API-Key header */
+    size_t key_len = httpd_req_get_hdr_value_len(req, "X-API-Key");
+    if (key_len == 0) {
+        return false;
+    }
+    
+    char *key = malloc(key_len + 1);
+    if (key == NULL) {
+        return false;
+    }
+    
+    if (httpd_req_get_hdr_value_str(req, "X-API-Key", key, key_len + 1) == ESP_OK) {
+        bool valid = (strcmp(key, s_api_key) == 0);
+        free(key);
+        return valid;
+    }
+    
+    free(key);
+    return false;
+}
+
+/**
  * @brief Check session auth for API calls - returns 401 JSON instead of redirect
+ * Checks both session cookie and X-API-Key header
  * @return true if authorized (or auth disabled), false if 401 sent
  */
 static bool check_api_auth(httpd_req_t *req)
@@ -183,6 +246,12 @@ static bool check_api_auth(httpd_req_t *req)
         return true;
     }
 
+    /* Check API key first (stateless auth) */
+    if (is_api_key_valid(req)) {
+        return true;
+    }
+
+    /* Fall back to session cookie */
     if (is_session_valid(req)) {
         return true;
     }
@@ -1398,7 +1467,10 @@ static esp_err_t api_config_auth_get_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "enabled", s_auth_enabled);
     cJSON_AddStringToObject(root, "username", s_auth_username);
-    /* Don't send password for security */
+    /* Don't send password for security, but do send API key (user needs to see it to use it) */
+    if (strlen(s_api_key) > 0) {
+        cJSON_AddStringToObject(root, "api_key", s_api_key);
+    }
     
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -1446,10 +1518,15 @@ static esp_err_t api_config_auth_post_handler(httpd_req_t *req)
         strncpy(s_auth_password, password->valuestring, sizeof(s_auth_password) - 1);
     }
     
+    /* Generate API key if enabling auth and none exists */
+    if (s_auth_enabled && strlen(s_api_key) == 0) {
+        generate_api_key();
+    }
+    
     cJSON_Delete(root);
     
     /* Save to NVS */
-    esp_err_t err = nvs_storage_save_auth_config(s_auth_enabled, s_auth_username, s_auth_password);
+    esp_err_t err = nvs_storage_save_auth_config(s_auth_enabled, s_auth_username, s_auth_password, s_api_key);
     
     cJSON *response = cJSON_CreateObject();
     cJSON_AddBoolToObject(response, "success", err == ESP_OK);
@@ -1458,6 +1535,40 @@ static esp_err_t api_config_auth_post_handler(httpd_req_t *req)
         ESP_LOGI(TAG, "Auth config saved (enabled=%d, user=%s)", s_auth_enabled, s_auth_username);
     } else {
         cJSON_AddStringToObject(response, "error", "Failed to save");
+    }
+    
+    char *json = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/config/auth/regenerate-key
+ * Regenerates the API key
+ */
+static esp_err_t api_config_auth_regenerate_key_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    
+    /* Generate new API key */
+    generate_api_key();
+    
+    /* Save to NVS */
+    esp_err_t err = nvs_storage_save_auth_config(s_auth_enabled, s_auth_username, s_auth_password, s_api_key);
+    
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", err == ESP_OK);
+    if (err == ESP_OK) {
+        cJSON_AddStringToObject(response, "api_key", s_api_key);
+        cJSON_AddStringToObject(response, "message", "API key regenerated");
+        ESP_LOGI(TAG, "API key regenerated");
+    } else {
+        cJSON_AddStringToObject(response, "error", "Failed to save new key");
     }
     
     char *json = cJSON_PrintUnformatted(response);
@@ -1715,6 +1826,13 @@ esp_err_t web_server_start(void)
         .handler = api_config_auth_post_handler,
     };
     REGISTER_URI(auth_config_post_uri);
+
+    httpd_uri_t auth_regenerate_key_uri = {
+        .uri = "/api/config/auth/regenerate-key",
+        .method = HTTP_POST,
+        .handler = api_config_auth_regenerate_key_handler,
+    };
+    REGISTER_URI(auth_regenerate_key_uri);
 
     ESP_LOGD(TAG, "Web server started");
     return ESP_OK;

@@ -17,6 +17,7 @@ A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assi
 - **Web-based Logs** - View system logs without serial connection (16KB circular buffer)
 - **Runtime Log Level Control** - Change log verbosity via web UI without reflashing
 - **Session-based Authentication** - Optional password protection with login page
+- **API Key Authentication** - Stateless API access for scripts and automation
 
 ## Hardware Requirements
 
@@ -294,9 +295,27 @@ By default, the web interface is open (no authentication required). To enable pa
 
 When enabled, unauthorized access redirects to a login page. Sessions are stored in a cookie and expire after 24 hours.
 
-### API Authentication
+### API Key Authentication
 
-Protected API endpoints return `401 Unauthorized` with JSON body containing `{"login_required": true}` when authentication is enabled but user is not logged in.
+For scripts and automation, use the API key instead of session cookies:
+
+```bash
+# Get sensor readings
+curl -H "X-API-Key: YOUR_API_KEY" http://thermux.local/api/sensors
+
+# Get device status
+curl -H "X-API-Key: YOUR_API_KEY" http://thermux.local/api/status
+```
+
+The API key is:
+- **Auto-generated** when authentication is first enabled
+- **Visible** in Settings → Security section (click 📋 to copy)
+- **Regeneratable** if compromised (click 🔄 to generate new key)
+- **Persisted** across reboots in NVS flash
+
+### Session Authentication
+
+For browser-based access, the web UI uses session cookies. Protected API endpoints return `401 Unauthorized` with JSON body containing `{"login_required": true}` when not authenticated.
 
 #### Auth Endpoints
 
@@ -306,10 +325,26 @@ Protected API endpoints return `401 Unauthorized` with JSON body containing `{"l
 | `/api/auth/login` | POST | Authenticate with `{"username":"...", "password":"..."}` |
 | `/api/auth/logout` | POST | Destroy session |
 | `/api/auth/status` | GET | Check if logged in |
+| `/api/config/auth` | GET | Get auth config (includes API key) |
+| `/api/config/auth/regenerate-key` | POST | Generate new API key |
 
-### Home Assistant with Authentication
+### Home Assistant Integration
 
-If auth is enabled, you need to manage cookies/sessions for REST integrations. For simpler setups, consider disabling auth and using network-level security (VLAN, firewall rules).
+With API key authentication, REST integrations are straightforward:
+
+```yaml
+# configuration.yaml
+rest:
+  - resource: http://thermux.local/api/sensors
+    headers:
+      X-API-Key: "your-api-key-here"
+    sensor:
+      - name: "Pool Temperature"
+        value_template: "{{ value_json.sensors[0].temperature }}"
+        unit_of_measurement: "°C"
+```
+
+Alternatively, use the built-in MQTT integration with Home Assistant auto-discovery (no API key needed for MQTT).
 
 ## Technical Notes
 
