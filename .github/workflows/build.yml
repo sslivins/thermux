@@ -5,8 +5,26 @@ on:
     branches: [main]
     tags:
       - 'v*'
+    paths:
+      - 'main/**'
+      - 'managed_components/**'
+      - 'scripts/**'
+      - 'CMakeLists.txt'
+      - 'sdkconfig'
+      - 'sdkconfig.defaults'
+      - 'partitions.csv'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
+    paths:
+      - 'main/**'
+      - 'managed_components/**'
+      - 'scripts/**'
+      - 'CMakeLists.txt'
+      - 'sdkconfig'
+      - 'sdkconfig.defaults'
+      - 'partitions.csv'
+      - '.github/workflows/**'
 
 permissions:
   contents: write

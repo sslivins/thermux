@@ -1,0 +1,7 @@
+Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
+C1,10uF,C_0805_2012Metric,82.9,-90.0,0.0,top
+C2,0.1uF,C_0805_2012Metric,77.95,-90.0,0.0,top
+F1,PTC 54mA/100mA (resettable),Fuse_0805_2012Metric,80.45,-93.0,0.0,top
+J1,TEMP_BUS_A,GCT_MJ3225-88-0_REVA,69.342,-88.5,-90.0,top
+J2,TEMP_SENSOR,JST_XH_S3B-XH-A_1x03_P2.50mm_Horizontal,80.5,-85.5,180.0,top
+J3,TEMP_BUS_B,GCT_MJ3225-88-0_REVA,91.658,-88.5,90.0,top

@@ -1,0 +1,7 @@
+Comment,Designator,Footprint,LCSC,Quantity
+TEMP_BUS_A,J1,GCT_MJ3225-88-0_REVA,,1
+TEMP_SENSOR,J2,JST_XH_S3B-XH-A_1x03_P2.50mm_Horizontal,,1
+PTC 54mA/100mA (resettable),F1,Fuse_0805_2012Metric,,1
+TEMP_BUS_B,J3,GCT_MJ3225-88-0_REVA,,1
+0.1uF,C2,C_0805_2012Metric,,1
+10uF,C1,C_0805_2012Metric,,1

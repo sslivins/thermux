@@ -24,6 +24,8 @@ A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assi
 - **Board**: [Olimex ESP32-POE-ISO](https://www.olimex.com/Products/IoT/ESP32/ESP32-POE-ISO/) (or compatible ESP32-POE board)
 - **Sensors**: DS18B20 1-Wire temperature sensors
 - **Connection**: Sensors connected to GPIO4 (configurable in menuconfig)
+- **PCB** (optional): Custom breakout board - see [hardware/](hardware/) for KiCad files and BOM
+- **Enclosure** (optional): 3D printable case - see [enclosure/](enclosure/) for print files
 
 ### Wiring
 
@@ -363,6 +365,26 @@ The delay depends on resolution (12-bit = 750ms max, but typically ~800ms total 
 ### Log Buffer
 
 A 16KB circular buffer captures ESP-IDF logs for web display. Noisy system components (HTTP server internals, Ethernet MAC, etc.) are filtered to keep logs useful. The buffer can be viewed, cleared, and downloaded from the config page.
+
+## Hardware Design
+
+This repository includes open-source hardware designs:
+
+### PCB ([hardware/](hardware/))
+
+Custom breakout board with RJ45 connectors for daisy-chaining DS18B20 sensors.
+
+- **KiCad project files** - Full schematic and PCB layout
+- **Gerber files** - Ready for fabrication (JLCPCB, PCBWay, etc.)
+- **Bill of Materials** - DigiKey part links
+
+### Enclosure ([enclosure/](enclosure/))
+
+3D printable case for the ESP32-POE and breakout board.
+
+- **Fusion 360** (.f3d) - Parametric source files
+- **STEP** (.step) - Universal CAD interchange format
+- **Print files** (.3mf, .stl) - Ready for slicing
 
 ## Version History
 

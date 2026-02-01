@@ -1,0 +1,11 @@
+# KiCad generated files
+*.kicad_prl
+*-backups/
+*-bak
+_autosave-*
+fp-info-cache
+*.dsn
+*.ses
+
+# Gerber generation artifacts (keep actual gerbers in gerbers/ folder)
+*-job.gbrjob
