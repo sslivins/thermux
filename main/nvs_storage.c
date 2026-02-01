@@ -251,7 +251,7 @@ esp_err_t nvs_storage_load_sensor_settings(uint32_t *read_interval_ms, uint32_t 
     return ESP_OK;
 }
 
-esp_err_t nvs_storage_save_auth_config(bool enabled, const char *username, const char *password)
+esp_err_t nvs_storage_save_auth_config(bool enabled, const char *username, const char *password, const char *api_key)
 {
     nvs_handle_t handle;
     esp_err_t err;
@@ -265,6 +265,9 @@ esp_err_t nvs_storage_save_auth_config(bool enabled, const char *username, const
     nvs_set_u8(handle, "auth_enabled", enabled ? 1 : 0);
     nvs_set_str(handle, "auth_user", username);
     nvs_set_str(handle, "auth_pass", password);
+    if (api_key != NULL && strlen(api_key) > 0) {
+        nvs_set_str(handle, "api_key", api_key);
+    }
 
     err = nvs_commit(handle);
     nvs_close(handle);
@@ -274,7 +277,8 @@ esp_err_t nvs_storage_save_auth_config(bool enabled, const char *username, const
 }
 
 esp_err_t nvs_storage_load_auth_config(bool *enabled, char *username, size_t username_len,
-                                        char *password, size_t password_len)
+                                        char *password, size_t password_len,
+                                        char *api_key, size_t api_key_len)
 {
     nvs_handle_t handle;
     esp_err_t err;
@@ -297,6 +301,15 @@ esp_err_t nvs_storage_load_auth_config(bool *enabled, char *username, size_t use
 
     len = password_len;
     nvs_get_str(handle, "auth_pass", password, &len);
+
+    /* Load API key if buffer provided */
+    if (api_key != NULL && api_key_len > 0) {
+        len = api_key_len;
+        err = nvs_get_str(handle, "api_key", api_key, &len);
+        if (err != ESP_OK) {
+            api_key[0] = '\0';  /* No API key stored */
+        }
+    }
 
     nvs_close(handle);
     return ESP_OK;

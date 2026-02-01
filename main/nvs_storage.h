@@ -90,8 +90,9 @@ esp_err_t nvs_storage_load_sensor_settings(uint32_t *read_interval_ms, uint32_t 
  * @param enabled Whether auth is enabled
  * @param username Username (max 32 chars)
  * @param password Password (max 64 chars)
+ * @param api_key API key (max 64 chars), can be NULL
  */
-esp_err_t nvs_storage_save_auth_config(bool enabled, const char *username, const char *password);
+esp_err_t nvs_storage_save_auth_config(bool enabled, const char *username, const char *password, const char *api_key);
 
 /**
  * @brief Load web authentication settings
@@ -100,9 +101,12 @@ esp_err_t nvs_storage_save_auth_config(bool enabled, const char *username, const
  * @param username_len Username buffer size
  * @param password Output: Password buffer
  * @param password_len Password buffer size
+ * @param api_key Output: API key buffer (can be NULL)
+ * @param api_key_len API key buffer size
  * @return ESP_OK if found, ESP_ERR_NOT_FOUND if not configured
  */
 esp_err_t nvs_storage_load_auth_config(bool *enabled, char *username, size_t username_len,
-                                        char *password, size_t password_len);
+                                        char *password, size_t password_len,
+                                        char *api_key, size_t api_key_len);
 
 #endif /* NVS_STORAGE_H */

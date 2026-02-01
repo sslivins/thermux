@@ -342,6 +342,16 @@
                     <label>Password</label>
                     <input type="password" id="auth-password" placeholder="Enter new password" autocomplete="new-password">
                     <div class="form-hint">Leave password blank to keep current password</div>
+                    
+                    <div id="api-key-section" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+                        <label>API Key</label>
+                        <div class="form-hint" style="margin-bottom: 8px;">Use this key for stateless API access with <code>X-API-Key</code> header</div>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <input type="text" id="api-key" readonly style="font-family: monospace; background: rgba(0,0,0,0.2); flex: 1;">
+                            <button class="btn btn-secondary" onclick="copyApiKey()" title="Copy to clipboard" style="padding: 10px 12px;">📋</button>
+                            <button class="btn btn-secondary" onclick="regenerateApiKey()" title="Generate new key" style="padding: 10px 12px;">🔄</button>
+                        </div>
+                    </div>
                 </div>
             </div>
             <button class="btn btn-primary" onclick="saveAuthConfig()">💾 Save Security Settings</button>
@@ -408,6 +418,7 @@
                 document.getElementById('auth-enabled').checked = auth.enabled;
                 document.getElementById('auth-username').value = auth.username || '';
                 document.getElementById('auth-fields').style.display = auth.enabled ? 'block' : 'none';
+                document.getElementById('api-key').value = auth.api_key || '';
             } catch (err) {
                 showToast('Failed to load configuration', true);
             }
@@ -918,36 +929,11 @@
                 navigator.clipboard.writeText(logs).then(() => {
                     showToast('Logs copied to clipboard');
                 }).catch(() => {
-                    fallbackCopy(logs);
+                    fallbackCopyText(logs, 'Logs');
                 });
             } else {
-                fallbackCopy(logs);
+                fallbackCopyText(logs, 'Logs');
             }
-        }
-        
-        function fallbackCopy(text) {
-            /* Fallback for non-HTTPS contexts (like ESP32 local HTTP) */
-            const textarea = document.createElement('textarea');
-            textarea.value = text;
-            textarea.style.position = 'fixed';
-            textarea.style.left = '-9999px';
-            textarea.style.top = '0';
-            document.body.appendChild(textarea);
-            textarea.focus();
-            textarea.select();
-            
-            try {
-                const success = document.execCommand('copy');
-                if (success) {
-                    showToast('Logs copied to clipboard');
-                } else {
-                    showToast('Failed to copy logs', true);
-                }
-            } catch (err) {
-                showToast('Failed to copy logs', true);
-            }
-            
-            document.body.removeChild(textarea);
         }
 
         function downloadLogs() {
@@ -1042,15 +1028,86 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
                 });
+                const result = await resp.json();
                 if (resp.ok) {
                     showToast('Security settings saved');
                     document.getElementById('auth-password').value = '';
+                    /* Update API key if one was generated */
+                    if (result.api_key) {
+                        document.getElementById('api-key').value = result.api_key;
+                    }
                     loadAuthStatus();  /* Refresh auth display */
+                    loadConfig();  /* Refresh to get new API key if generated */
                 } else {
                     showToast('Failed to save security settings', true);
                 }
             } catch (err) {
                 showToast('Error saving security settings', true);
+            }
+        }
+
+        function copyApiKey() {
+            const apiKey = document.getElementById('api-key').value;
+            if (!apiKey) {
+                showToast('No API key available', true);
+                return;
+            }
+            
+            /* Try modern clipboard API first, fall back to execCommand for HTTP contexts */
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(apiKey).then(() => {
+                    showToast('API key copied to clipboard');
+                }).catch(() => {
+                    fallbackCopyText(apiKey, 'API key');
+                });
+            } else {
+                fallbackCopyText(apiKey, 'API key');
+            }
+        }
+        
+        function fallbackCopyText(text, label) {
+            /* Fallback for non-HTTPS contexts (like ESP32 local HTTP) */
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.left = '-9999px';
+            textarea.style.top = '0';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            
+            try {
+                const success = document.execCommand('copy');
+                if (success) {
+                    showToast(label + ' copied to clipboard');
+                } else {
+                    showToast('Failed to copy ' + label, true);
+                }
+            } catch (err) {
+                showToast('Failed to copy ' + label, true);
+            }
+            
+            document.body.removeChild(textarea);
+        }
+
+        async function regenerateApiKey() {
+            if (!confirm('Are you sure you want to regenerate the API key? Any existing integrations using the current key will stop working.')) {
+                return;
+            }
+            
+            try {
+                const resp = await fetch('/api/config/auth/regenerate-key', {
+                    method: 'POST'
+                });
+                const result = await resp.json();
+                if (resp.ok && result.success) {
+                    document.getElementById('api-key').value = result.api_key;
+                    showToast('API key regenerated');
+                } else {
+                    showToast(result.error || 'Failed to regenerate API key', true);
+                }
+            } catch (err) {
+                showToast('Error regenerating API key', true);
             }
         }
 
