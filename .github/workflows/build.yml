@@ -37,7 +37,7 @@ jobs:
         with:
           name: firmware-${{ github.ref_name }}
           path: |
-            build/esp32-poe-temp-monitor.bin
+            build/thermux.bin
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
           retention-days: 90
@@ -47,7 +47,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            build/esp32-poe-temp-monitor.bin
+            build/thermux.bin
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

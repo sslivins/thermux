@@ -1,4 +1,4 @@
-menu "ESP32 POE Temperature Monitor Configuration"
+menu "Thermux Configuration"
 
     menu "Network Configuration"
         config USE_ETHERNET
@@ -55,7 +55,7 @@ menu "ESP32 POE Temperature Monitor Configuration"
 
         config MQTT_BASE_TOPIC
             string "MQTT Base Topic"
-            default "esp32-poe-temp"
+            default "thermux"
             help
                 Base topic for MQTT messages
 
@@ -119,7 +119,7 @@ menu "ESP32 POE Temperature Monitor Configuration"
 
         config GITHUB_REPO
             string "GitHub Repository Name"
-            default "temp-monitor"
+            default "thermux"
             depends on OTA_ENABLED
             help
                 GitHub repository name

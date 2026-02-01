@@ -432,7 +432,7 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
-# ESP32 POE Temperature Monitor Configuration
+# Thermux Configuration
 #
 
 #
@@ -470,7 +470,7 @@ CONFIG_SENSOR_PUBLISH_INTERVAL_MS=30000
 #
 CONFIG_OTA_ENABLED=y
 CONFIG_GITHUB_OWNER="sslivins"
-CONFIG_GITHUB_REPO="temp-monitor"
+CONFIG_GITHUB_REPO="thermux"
 CONFIG_OTA_CHECK_INTERVAL_HOURS=24
 # CONFIG_OTA_AUTO_UPDATE is not set
 # end of OTA Update Configuration
@@ -481,7 +481,7 @@ CONFIG_OTA_CHECK_INTERVAL_HOURS=24
 CONFIG_WEB_SERVER_PORT=80
 # CONFIG_WEB_AUTH_ENABLED is not set
 # end of Web Server Configuration
-# end of ESP32 POE Temperature Monitor Configuration
+# end of Thermux Configuration
 
 #
 # Compiler options

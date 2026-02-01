@@ -200,7 +200,7 @@ esp_err_t mqtt_ha_register_sensor(const char *sensor_id, const char *friendly_na
     
     /* Device info (groups all sensors under one device) */
     cJSON *device = cJSON_CreateObject();
-    cJSON_AddStringToObject(device, "name", "ESP32 POE Temperature Monitor");
+    cJSON_AddStringToObject(device, "name", "Thermux");
     cJSON_AddStringToObject(device, "manufacturer", "Custom");
     cJSON_AddStringToObject(device, "model", "ESP32-POE-ISO");
     cJSON_AddStringToObject(device, "sw_version", APP_VERSION);
@@ -284,7 +284,7 @@ esp_err_t mqtt_ha_publish_discovery_all(void)
 static cJSON* create_device_info(void)
 {
     cJSON *device = cJSON_CreateObject();
-    cJSON_AddStringToObject(device, "name", "ESP32 POE Temperature Monitor");
+    cJSON_AddStringToObject(device, "name", "Thermux");
     cJSON_AddStringToObject(device, "manufacturer", "Custom");
     cJSON_AddStringToObject(device, "model", "ESP32-POE-ISO");
     cJSON_AddStringToObject(device, "sw_version", APP_VERSION);

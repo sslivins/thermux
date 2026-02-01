@@ -1,4 +1,4 @@
-# ESP32-POE Temperature Monitor
+# Thermux
 
 A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assistant integration via MQTT auto-discovery. **Supports up to 20 DS18B20 sensors on a single 1-Wire bus** - perfect for monitoring multiple zones, equipment, or environments from one device.
 
@@ -12,8 +12,8 @@ A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assi
 - **Custom Sensor Names** - Assign friendly names to sensors via web UI (persisted in NVS)
 - **OTA Updates** - Over-the-air firmware updates from GitHub releases or manual upload with progress display
 - **Ethernet & WiFi** - Primary Ethernet with WiFi fallback
-- **mDNS** - Access via `temp-monitor.local` (auto-increments on collision: temp-monitor-2.local, etc.)
-- **Service Discovery** - Discoverable via `_tempmon._tcp` and `_http._tcp` services
+- **mDNS** - Access via `thermux.local` (auto-increments on collision: thermux-2.local, etc.)
+- **Service Discovery** - Discoverable via `_thermux._tcp` and `_http._tcp` services
 - **Web-based Logs** - View system logs without serial connection (16KB circular buffer)
 - **Runtime Log Level Control** - Change log verbosity via web UI without reflashing
 - **Session-based Authentication** - Optional password protection with login page
@@ -58,9 +58,9 @@ Or use the ESP-IDF VS Code extension build/flash commands.
 
 ## Configuration
 
-After flashing, access the web interface at `http://temp-monitor.local` or the device IP.
+After flashing, access the web interface at `http://thermux.local` or the device IP.
 
-> **Note**: If multiple devices are on the network, subsequent devices will be `temp-monitor-2.local`, `temp-monitor-3.local`, etc.
+> **Note**: If multiple devices are on the network, subsequent devices will be `thermux-2.local`, `thermux-3.local`, etc.
 
 ### Web Interface Pages
 
@@ -250,7 +250,7 @@ You can also poll sensors directly:
 ```yaml
 # configuration.yaml
 rest:
-  - resource: http://tempmon-XXXX.local/api/sensors
+  - resource: http://thermux.local/api/sensors
     scan_interval: 60
     sensor:
       - name: "Temperature Sensor 1"
@@ -264,8 +264,8 @@ rest:
 ```yaml
 # configuration.yaml
 rest_command:
-  update_temp_monitor:
-    url: "http://tempmon-XXXX.local/api/ota/update"
+  update_thermux:
+    url: "http://thermux.local/api/ota/update"
     method: POST
 ```
 
@@ -331,7 +331,7 @@ A 16KB circular buffer captures ESP-IDF logs for web display. Noisy system compo
 
 ## Version History
 
-See [GitHub Releases](https://github.com/sslivins/temp-monitor/releases) for changelog.
+See [GitHub Releases](https://github.com/sslivins/thermux/releases) for changelog.
 
 ## License
 

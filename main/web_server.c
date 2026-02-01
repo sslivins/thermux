@@ -1225,7 +1225,7 @@ static esp_err_t api_system_factory_reset_handler(httpd_req_t *req)
 /* Login page HTML - embedded directly since it's small and special */
 static const char *login_html = 
 "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-"<title>Login - Temperature Monitor</title><style>"
+"<title>Login - Thermux</title><style>"
 "*{box-sizing:border-box;margin:0;padding:0}"
 "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}"
 ".login-card{background:rgba(255,255,255,0.05);border-radius:16px;padding:40px;width:100%;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,0.3)}"
@@ -1243,7 +1243,7 @@ static const char *login_html =
 "</style></head><body>"
 "<div class=\"login-card\">"
 "<div class=\"logo\">🌡️</div>"
-"<h1>Temperature Monitor</h1>"
+"<h1>Thermux</h1>"
 "<div class=\"error\" id=\"error\">Invalid username or password</div>"
 "<form id=\"loginForm\">"
 "<div class=\"form-group\"><label>Username</label><input type=\"text\" id=\"username\" autocomplete=\"username\" required></div>"
