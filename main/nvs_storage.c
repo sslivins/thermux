@@ -250,3 +250,54 @@ esp_err_t nvs_storage_load_sensor_settings(uint32_t *read_interval_ms, uint32_t 
     nvs_close(handle);
     return ESP_OK;
 }
+
+esp_err_t nvs_storage_save_auth_config(bool enabled, const char *username, const char *password)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    nvs_set_u8(handle, "auth_enabled", enabled ? 1 : 0);
+    nvs_set_str(handle, "auth_user", username);
+    nvs_set_str(handle, "auth_pass", password);
+
+    err = nvs_commit(handle);
+    nvs_close(handle);
+
+    ESP_LOGI(TAG, "Saved auth configuration (enabled=%d)", enabled);
+    return err;
+}
+
+esp_err_t nvs_storage_load_auth_config(bool *enabled, char *username, size_t username_len,
+                                        char *password, size_t password_len)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t auth_enabled = 0;
+    err = nvs_get_u8(handle, "auth_enabled", &auth_enabled);
+    if (err != ESP_OK) {
+        nvs_close(handle);
+        return err;
+    }
+    *enabled = (auth_enabled != 0);
+
+    size_t len = username_len;
+    nvs_get_str(handle, "auth_user", username, &len);
+
+    len = password_len;
+    nvs_get_str(handle, "auth_pass", password, &len);
+
+    nvs_close(handle);
+    return ESP_OK;
+}

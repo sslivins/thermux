@@ -85,4 +85,24 @@ esp_err_t nvs_storage_save_sensor_settings(uint32_t read_interval_ms, uint32_t p
  */
 esp_err_t nvs_storage_load_sensor_settings(uint32_t *read_interval_ms, uint32_t *publish_interval_ms, uint8_t *resolution);
 
+/**
+ * @brief Save web authentication settings
+ * @param enabled Whether auth is enabled
+ * @param username Username (max 32 chars)
+ * @param password Password (max 64 chars)
+ */
+esp_err_t nvs_storage_save_auth_config(bool enabled, const char *username, const char *password);
+
+/**
+ * @brief Load web authentication settings
+ * @param enabled Output: Whether auth is enabled
+ * @param username Output: Username buffer
+ * @param username_len Username buffer size
+ * @param password Output: Password buffer
+ * @param password_len Password buffer size
+ * @return ESP_OK if found, ESP_ERR_NOT_FOUND if not configured
+ */
+esp_err_t nvs_storage_load_auth_config(bool *enabled, char *username, size_t username_len,
+                                        char *password, size_t password_len);
+
 #endif /* NVS_STORAGE_H */

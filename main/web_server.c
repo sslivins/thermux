@@ -20,6 +20,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
+#include <stdlib.h>
+#include "esp_random.h"
+#include "esp_timer.h"
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -27,6 +30,16 @@
 
 static const char *TAG = "web_server";
 static httpd_handle_t s_server = NULL;
+
+/* Auth credentials cache (loaded from NVS at startup) */
+static bool s_auth_enabled = false;
+static char s_auth_username[33] = "";
+static char s_auth_password[65] = "";
+
+/* Session management - simple single-session approach for embedded device */
+static char s_session_token[33] = "";  /* Random hex token */
+static int64_t s_session_expiry = 0;   /* Session expiry time (esp_timer ticks) */
+#define SESSION_TIMEOUT_MS (24 * 60 * 60 * 1000)  /* 24 hours */
 
 extern const char *APP_VERSION;
 
@@ -42,10 +55,154 @@ extern const uint8_t config_html_start[] asm("_binary_config_html_start");
 extern const uint8_t config_html_end[] asm("_binary_config_html_end");
 
 /**
+ * @brief Load auth config from NVS (called at startup)
+ */
+static void load_auth_config(void)
+{
+    esp_err_t err = nvs_storage_load_auth_config(&s_auth_enabled, s_auth_username, 
+                                                  sizeof(s_auth_username), s_auth_password, 
+                                                  sizeof(s_auth_password));
+    if (err != ESP_OK) {
+        /* No config saved, use Kconfig defaults if enabled */
+#if CONFIG_WEB_AUTH_ENABLED
+        s_auth_enabled = true;
+        strncpy(s_auth_username, CONFIG_WEB_AUTH_USERNAME, sizeof(s_auth_username) - 1);
+        strncpy(s_auth_password, CONFIG_WEB_AUTH_PASSWORD, sizeof(s_auth_password) - 1);
+        ESP_LOGI(TAG, "Using default auth credentials from Kconfig");
+#else
+        s_auth_enabled = false;
+        ESP_LOGI(TAG, "Web authentication disabled");
+#endif
+    } else {
+        ESP_LOGI(TAG, "Loaded auth config (enabled=%d)", s_auth_enabled);
+    }
+}
+
+/**
+ * @brief Generate a random session token
+ */
+static void generate_session_token(void)
+{
+    uint32_t rnd[4];
+    for (int i = 0; i < 4; i++) {
+        rnd[i] = esp_random();
+    }
+    snprintf(s_session_token, sizeof(s_session_token), "%08lx%08lx%08lx%08lx",
+             (unsigned long)rnd[0], (unsigned long)rnd[1], 
+             (unsigned long)rnd[2], (unsigned long)rnd[3]);
+    s_session_expiry = esp_timer_get_time() / 1000 + SESSION_TIMEOUT_MS;
+}
+
+/**
+ * @brief Check if session token from cookie is valid
+ */
+static bool is_session_valid(httpd_req_t *req)
+{
+    /* Get Cookie header */
+    size_t cookie_len = httpd_req_get_hdr_value_len(req, "Cookie");
+    if (cookie_len == 0) {
+        return false;
+    }
+
+    char *cookie = malloc(cookie_len + 1);
+    if (!cookie) {
+        return false;
+    }
+
+    if (httpd_req_get_hdr_value_str(req, "Cookie", cookie, cookie_len + 1) != ESP_OK) {
+        free(cookie);
+        return false;
+    }
+
+    /* Look for session=TOKEN in cookie */
+    char *session_start = strstr(cookie, "session=");
+    if (!session_start) {
+        free(cookie);
+        return false;
+    }
+
+    session_start += 8;  /* Skip "session=" */
+    char token[33] = {0};
+    int i = 0;
+    while (session_start[i] && session_start[i] != ';' && i < 32) {
+        token[i] = session_start[i];
+        i++;
+    }
+    token[i] = '\0';
+    free(cookie);
+
+    /* Verify token and check expiry */
+    if (strlen(s_session_token) == 0) {
+        return false;
+    }
+    
+    int64_t now = esp_timer_get_time() / 1000;
+    if (now > s_session_expiry) {
+        s_session_token[0] = '\0';  /* Clear expired session */
+        return false;
+    }
+
+    return strcmp(token, s_session_token) == 0;
+}
+
+/**
+ * @brief Redirect to login page
+ */
+static void redirect_to_login(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "/login");
+    httpd_resp_send(req, NULL, 0);
+}
+
+/**
+ * @brief Check session auth - redirects to login if unauthorized
+ * @return true if authorized (or auth disabled), false if redirect sent
+ */
+static bool check_session_auth(httpd_req_t *req)
+{
+    if (!s_auth_enabled) {
+        return true;  /* Auth disabled, allow all */
+    }
+
+    if (is_session_valid(req)) {
+        return true;  /* Valid session */
+    }
+
+    redirect_to_login(req);
+    return false;
+}
+
+/**
+ * @brief Check session auth for API calls - returns 401 JSON instead of redirect
+ * @return true if authorized (or auth disabled), false if 401 sent
+ */
+static bool check_api_auth(httpd_req_t *req)
+{
+    if (!s_auth_enabled) {
+        return true;
+    }
+
+    if (is_session_valid(req)) {
+        return true;
+    }
+
+    httpd_resp_set_status(req, "401 Unauthorized");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"error\":\"Unauthorized\",\"login_required\":true}");
+    return false;
+}
+
+/* Macro to check auth at start of handler - returns ESP_OK if unauthorized (response already sent) */
+#define CHECK_AUTH(req) do { if (!check_api_auth(req)) return ESP_OK; } while(0)
+#define CHECK_PAGE_AUTH(req) do { if (!check_session_auth(req)) return ESP_OK; } while(0)
+
+/**
  * @brief Handler for GET /
  */
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
+    CHECK_PAGE_AUTH(req);
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, (const char *)index_html_start, index_html_end - index_html_start);
     return ESP_OK;
@@ -58,6 +215,7 @@ static esp_err_t index_get_handler(httpd_req_t *req)
  */
 static esp_err_t api_status_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "version", APP_VERSION);
     cJSON_AddNumberToObject(root, "sensor_count", sensor_manager_get_count());
@@ -90,6 +248,7 @@ static esp_err_t api_status_handler(httpd_req_t *req)
  */
 static esp_err_t api_sensors_get_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     int count;
     const managed_sensor_t *sensors = sensor_manager_get_sensors(&count);
 
@@ -125,6 +284,7 @@ static esp_err_t api_sensors_get_handler(httpd_req_t *req)
  */
 static esp_err_t api_sensors_rescan_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     esp_err_t err = sensor_manager_rescan();
     
     cJSON *root = cJSON_CreateObject();
@@ -146,6 +306,7 @@ static esp_err_t api_sensors_rescan_handler(httpd_req_t *req)
  */
 static esp_err_t api_sensor_name_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     /* Extract address from URI */
     char address[20] = {0};
     const char *uri = req->uri;
@@ -224,6 +385,7 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
  */
 static esp_err_t config_get_handler(httpd_req_t *req)
 {
+    CHECK_PAGE_AUTH(req);
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, (const char *)config_html_start, config_html_end - config_html_start);
     return ESP_OK;
@@ -234,6 +396,7 @@ static esp_err_t config_get_handler(httpd_req_t *req)
  */
 static esp_err_t api_ota_check_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     ESP_LOGD(TAG, "OTA check requested via web UI");
     cJSON *root = cJSON_CreateObject();
     
@@ -273,6 +436,7 @@ static esp_err_t api_ota_check_handler(httpd_req_t *req)
  */
 static esp_err_t api_ota_status_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     cJSON *root = cJSON_CreateObject();
     
 #if CONFIG_OTA_ENABLED
@@ -328,6 +492,7 @@ static esp_err_t api_ota_status_handler(httpd_req_t *req)
  */
 static esp_err_t api_ota_update_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     cJSON *root = cJSON_CreateObject();
     
 #if CONFIG_OTA_ENABLED
@@ -377,6 +542,7 @@ static esp_err_t api_ota_update_handler(httpd_req_t *req)
  */
 static esp_err_t api_ota_upload_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     esp_err_t err;
     esp_ota_handle_t ota_handle = 0;
     const esp_partition_t *update_partition = NULL;
@@ -520,6 +686,7 @@ upload_error:
  */
 static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     wifi_ap_record_t ap_records[20];
     uint16_t ap_count = 0;
     
@@ -575,6 +742,7 @@ static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
  */
 static esp_err_t api_logs_get_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     /* Allocate buffer for logs (same size as ring buffer) */
     char *log_data = malloc(LOG_BUFFER_SIZE);
     if (!log_data) {
@@ -596,6 +764,7 @@ static esp_err_t api_logs_get_handler(httpd_req_t *req)
  */
 static esp_err_t api_logs_clear_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     log_buffer_clear();
     
     httpd_resp_set_type(req, "application/json");
@@ -608,6 +777,7 @@ static esp_err_t api_logs_clear_handler(httpd_req_t *req)
  */
 static esp_err_t api_logs_level_get_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     /* Get current log level for "main" tag (representative of app) */
     esp_log_level_t level = esp_log_level_get("main");
     
@@ -633,6 +803,7 @@ static esp_err_t api_logs_level_get_handler(httpd_req_t *req)
  */
 static esp_err_t api_logs_level_post_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     char content[64];
     int received = httpd_req_recv(req, content, sizeof(content) - 1);
     if (received <= 0) {
@@ -677,6 +848,7 @@ static esp_err_t api_logs_level_post_handler(httpd_req_t *req)
  */
 static esp_err_t api_config_wifi_get_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     char ssid[32] = {0};
     char password[64] = {0};
     
@@ -708,6 +880,7 @@ static esp_err_t api_config_wifi_get_handler(httpd_req_t *req)
  */
 static esp_err_t api_config_wifi_post_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     char content[256];
     int ret = httpd_req_recv(req, content, sizeof(content) - 1);
     if (ret <= 0) {
@@ -765,6 +938,7 @@ static esp_err_t api_config_wifi_post_handler(httpd_req_t *req)
  */
 static esp_err_t api_config_mqtt_get_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     char uri[128] = {0};
     char username[64] = {0};
     char password[64] = {0};
@@ -801,6 +975,7 @@ static esp_err_t api_config_mqtt_get_handler(httpd_req_t *req)
  */
 static esp_err_t api_config_mqtt_post_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     char content[384];
     int ret = httpd_req_recv(req, content, sizeof(content) - 1);
     if (ret <= 0) {
@@ -868,6 +1043,7 @@ static esp_err_t api_config_mqtt_post_handler(httpd_req_t *req)
  */
 static esp_err_t api_mqtt_reconnect_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     ESP_LOGD(TAG, "MQTT reconnect requested");
     
     /* Stop and reinitialize MQTT with new settings */
@@ -900,6 +1076,7 @@ extern void set_sensor_publish_interval(uint32_t ms);
  */
 static esp_err_t api_config_sensor_get_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "read_interval", get_sensor_read_interval());
     cJSON_AddNumberToObject(root, "publish_interval", get_sensor_publish_interval());
@@ -920,6 +1097,7 @@ static esp_err_t api_config_sensor_get_handler(httpd_req_t *req)
  */
 static esp_err_t api_config_sensor_post_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     char content[256];
     int ret = httpd_req_recv(req, content, sizeof(content) - 1);
     if (ret <= 0) {
@@ -989,6 +1167,7 @@ static esp_err_t api_config_sensor_post_handler(httpd_req_t *req)
  */
 static esp_err_t api_system_restart_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     ESP_LOGW(TAG, "System restart requested");
     
     cJSON *response = cJSON_CreateObject();
@@ -1014,6 +1193,7 @@ static esp_err_t api_system_restart_handler(httpd_req_t *req)
  */
 static esp_err_t api_system_factory_reset_handler(httpd_req_t *req)
 {
+    CHECK_AUTH(req);
     ESP_LOGW(TAG, "Factory reset requested");
     
     esp_err_t err = nvs_storage_factory_reset();
@@ -1042,14 +1222,265 @@ static esp_err_t api_system_factory_reset_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Login page HTML - embedded directly since it's small and special */
+static const char *login_html = 
+"<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+"<title>Login - Temperature Monitor</title><style>"
+"*{box-sizing:border-box;margin:0;padding:0}"
+"body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}"
+".login-card{background:rgba(255,255,255,0.05);border-radius:16px;padding:40px;width:100%;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,0.3)}"
+".logo{text-align:center;margin-bottom:30px;font-size:48px}"
+"h1{color:#fff;text-align:center;margin-bottom:30px;font-size:1.5em;font-weight:500}"
+".form-group{margin-bottom:20px}"
+"label{display:block;color:#aaa;margin-bottom:8px;font-size:0.9em}"
+"input{width:100%;padding:12px 16px;border:1px solid rgba(255,255,255,0.1);border-radius:8px;background:rgba(0,0,0,0.2);color:#fff;font-size:1em;transition:border-color 0.2s}"
+"input:focus{outline:none;border-color:#4da6ff}"
+".btn{width:100%;padding:14px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);border:none;border-radius:8px;color:#fff;font-size:1em;font-weight:600;cursor:pointer;transition:transform 0.2s,box-shadow 0.2s}"
+".btn:hover{transform:translateY(-2px);box-shadow:0 4px 20px rgba(102,126,234,0.4)}"
+".btn:active{transform:translateY(0)}"
+".error{background:rgba(255,82,82,0.2);border:1px solid rgba(255,82,82,0.5);color:#ff5252;padding:12px;border-radius:8px;margin-bottom:20px;text-align:center;display:none}"
+".error.show{display:block}"
+"</style></head><body>"
+"<div class=\"login-card\">"
+"<div class=\"logo\">🌡️</div>"
+"<h1>Temperature Monitor</h1>"
+"<div class=\"error\" id=\"error\">Invalid username or password</div>"
+"<form id=\"loginForm\">"
+"<div class=\"form-group\"><label>Username</label><input type=\"text\" id=\"username\" autocomplete=\"username\" required></div>"
+"<div class=\"form-group\"><label>Password</label><input type=\"password\" id=\"password\" autocomplete=\"current-password\" required></div>"
+"<button type=\"submit\" class=\"btn\">Sign In</button>"
+"</form></div>"
+"<script>"
+"document.getElementById('loginForm').addEventListener('submit',async(e)=>{"
+"e.preventDefault();"
+"const u=document.getElementById('username').value;"
+"const p=document.getElementById('password').value;"
+"try{"
+"const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});"
+"const d=await r.json();"
+"if(d.success){window.location.href='/';}else{document.getElementById('error').classList.add('show');}"
+"}catch(err){document.getElementById('error').classList.add('show');}"
+"});"
+"document.getElementById('username').focus();"
+"</script></body></html>";
+
+/**
+ * @brief Handler for GET /login - login page
+ */
+static esp_err_t login_page_handler(httpd_req_t *req)
+{
+    /* If auth is disabled or already logged in, redirect to home */
+    if (!s_auth_enabled || is_session_valid(req)) {
+        httpd_resp_set_status(req, "302 Found");
+        httpd_resp_set_hdr(req, "Location", "/");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, login_html, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/auth/login - authenticate and create session
+ */
+static esp_err_t api_auth_login_handler(httpd_req_t *req)
+{
+    char content[128];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_FAIL;
+    }
+    content[ret] = '\0';
+
+    cJSON *root = cJSON_Parse(content);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *username = cJSON_GetObjectItem(root, "username");
+    cJSON *password = cJSON_GetObjectItem(root, "password");
+
+    bool success = false;
+    if (cJSON_IsString(username) && cJSON_IsString(password)) {
+        if (strcmp(username->valuestring, s_auth_username) == 0 &&
+            strcmp(password->valuestring, s_auth_password) == 0) {
+            success = true;
+            generate_session_token();
+            ESP_LOGI(TAG, "User '%s' logged in", s_auth_username);
+        } else {
+            ESP_LOGW(TAG, "Failed login attempt for user '%s'", 
+                     username->valuestring ? username->valuestring : "(null)");
+        }
+    }
+    cJSON_Delete(root);
+
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", success);
+
+    if (success) {
+        /* Set session cookie */
+        char cookie[80];
+        snprintf(cookie, sizeof(cookie), "session=%s; Path=/; HttpOnly; SameSite=Strict", s_session_token);
+        httpd_resp_set_hdr(req, "Set-Cookie", cookie);
+    }
+
+    char *json = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/auth/logout - destroy session
+ */
+static esp_err_t api_auth_logout_handler(httpd_req_t *req)
+{
+    /* Clear session */
+    s_session_token[0] = '\0';
+    s_session_expiry = 0;
+    ESP_LOGI(TAG, "User logged out");
+
+    /* Clear cookie */
+    httpd_resp_set_hdr(req, "Set-Cookie", "session=; Path=/; HttpOnly; Max-Age=0");
+
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", true);
+
+    char *json = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for GET /api/auth/status - check if logged in
+ */
+static esp_err_t api_auth_status_handler(httpd_req_t *req)
+{
+    bool logged_in = !s_auth_enabled || is_session_valid(req);
+    
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "auth_enabled", s_auth_enabled);
+    cJSON_AddBoolToObject(response, "logged_in", logged_in);
+    if (logged_in && s_auth_enabled) {
+        cJSON_AddStringToObject(response, "username", s_auth_username);
+    }
+
+    char *json = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for GET /api/config/auth
+ */
+static esp_err_t api_config_auth_get_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "enabled", s_auth_enabled);
+    cJSON_AddStringToObject(root, "username", s_auth_username);
+    /* Don't send password for security */
+    
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/config/auth
+ */
+static esp_err_t api_config_auth_post_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_FAIL;
+    }
+    content[ret] = '\0';
+    
+    cJSON *root = cJSON_Parse(content);
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+    
+    cJSON *enabled = cJSON_GetObjectItem(root, "enabled");
+    cJSON *username = cJSON_GetObjectItem(root, "username");
+    cJSON *password = cJSON_GetObjectItem(root, "password");
+    
+    /* Update local cache */
+    if (cJSON_IsBool(enabled)) {
+        s_auth_enabled = cJSON_IsTrue(enabled);
+    }
+    if (cJSON_IsString(username) && strlen(username->valuestring) > 0) {
+        strncpy(s_auth_username, username->valuestring, sizeof(s_auth_username) - 1);
+    }
+    if (cJSON_IsString(password) && strlen(password->valuestring) > 0) {
+        strncpy(s_auth_password, password->valuestring, sizeof(s_auth_password) - 1);
+    }
+    
+    cJSON_Delete(root);
+    
+    /* Save to NVS */
+    esp_err_t err = nvs_storage_save_auth_config(s_auth_enabled, s_auth_username, s_auth_password);
+    
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", err == ESP_OK);
+    if (err == ESP_OK) {
+        cJSON_AddStringToObject(response, "message", "Auth configuration saved");
+        ESP_LOGI(TAG, "Auth config saved (enabled=%d, user=%s)", s_auth_enabled, s_auth_username);
+    } else {
+        cJSON_AddStringToObject(response, "error", "Failed to save");
+    }
+    
+    char *json = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    
+    return ESP_OK;
+}
+
 esp_err_t web_server_start(void)
 {
+    /* Load auth config from NVS */
+    load_auth_config();
+    
     ESP_LOGD(TAG, "Starting web server on port %d", CONFIG_WEB_SERVER_PORT);
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = CONFIG_WEB_SERVER_PORT;
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 25;  /* 22 endpoints + room for future */
+    config.max_uri_handlers = 32;  /* 28 endpoints + room for future */
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
@@ -1072,6 +1503,35 @@ esp_err_t web_server_start(void)
         .handler = index_get_handler,
     };
     REGISTER_URI(index_uri);
+
+    /* Login page and auth endpoints (no auth required for these) */
+    httpd_uri_t login_uri = {
+        .uri = "/login",
+        .method = HTTP_GET,
+        .handler = login_page_handler,
+    };
+    REGISTER_URI(login_uri);
+
+    httpd_uri_t auth_login_uri = {
+        .uri = "/api/auth/login",
+        .method = HTTP_POST,
+        .handler = api_auth_login_handler,
+    };
+    REGISTER_URI(auth_login_uri);
+
+    httpd_uri_t auth_logout_uri = {
+        .uri = "/api/auth/logout",
+        .method = HTTP_POST,
+        .handler = api_auth_logout_handler,
+    };
+    REGISTER_URI(auth_logout_uri);
+
+    httpd_uri_t auth_status_uri = {
+        .uri = "/api/auth/status",
+        .method = HTTP_GET,
+        .handler = api_auth_status_handler,
+    };
+    REGISTER_URI(auth_status_uri);
 
     httpd_uri_t status_uri = {
         .uri = "/api/status",
@@ -1240,6 +1700,21 @@ esp_err_t web_server_start(void)
         .handler = api_system_factory_reset_handler,
     };
     REGISTER_URI(factory_reset_uri);
+
+    /* Auth config endpoints */
+    httpd_uri_t auth_config_get_uri = {
+        .uri = "/api/config/auth",
+        .method = HTTP_GET,
+        .handler = api_config_auth_get_handler,
+    };
+    REGISTER_URI(auth_config_get_uri);
+
+    httpd_uri_t auth_config_post_uri = {
+        .uri = "/api/config/auth",
+        .method = HTTP_POST,
+        .handler = api_config_auth_post_handler,
+    };
+    REGISTER_URI(auth_config_post_uri);
 
     ESP_LOGD(TAG, "Web server started");
     return ESP_OK;

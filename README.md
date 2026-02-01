@@ -5,15 +5,18 @@ A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assi
 ## Features
 
 - **Up to 20 DS18B20 Sensors** - Monitor multiple temperature points from a single device on one 1-Wire bus
+- **Optimized Parallel Reads** - Uses 1-Wire skip ROM command to read all sensors simultaneously (~240ms for 10 sensors vs ~1200ms sequential)
 - **Home Assistant Integration** - MQTT auto-discovery for seamless integration
 - **Web Interface** - Configuration and monitoring via built-in web server
 - **Sensor Identification** - Change detection highlighting helps identify which physical sensor is which
 - **Custom Sensor Names** - Assign friendly names to sensors via web UI (persisted in NVS)
-- **OTA Updates** - Over-the-air firmware updates from GitHub releases or manual upload
+- **OTA Updates** - Over-the-air firmware updates from GitHub releases or manual upload with progress display
 - **Ethernet & WiFi** - Primary Ethernet with WiFi fallback
 - **mDNS** - Access via `temp-monitor.local` (auto-increments on collision: temp-monitor-2.local, etc.)
 - **Service Discovery** - Discoverable via `_tempmon._tcp` and `_http._tcp` services
-- **Web-based Logs** - View system logs without serial connection
+- **Web-based Logs** - View system logs without serial connection (16KB circular buffer)
+- **Runtime Log Level Control** - Change log verbosity via web UI without reflashing
+- **Session-based Authentication** - Optional password protection with login page
 
 ## Hardware Requirements
 
@@ -76,6 +79,7 @@ After flashing, access the web interface at `http://temp-monitor.local` or the d
 | **Read Interval** | Sensor polling interval (seconds) |
 | **Publish Interval** | MQTT publish interval (seconds) |
 | **OTA URL** | GitHub releases URL for automatic updates |
+| **Security** | Enable/disable password protection |
 
 ## REST API
 
@@ -155,12 +159,65 @@ GET /api/status
 
 Returns system information including version, uptime, memory, and network status.
 
+#### Restart Device
+```
+POST /api/system/restart
+```
+
+Triggers a device reboot.
+
 #### WiFi Network Scan
 ```
 GET /api/wifi/scan
 ```
 
 Returns available WiFi networks for configuration.
+
+### Logs
+
+#### Get Log Buffer
+```
+GET /api/logs
+```
+
+Returns the contents of the 16KB circular log buffer.
+
+#### Clear Logs
+```
+POST /api/logs/clear
+```
+
+Clears the log buffer.
+
+#### Get/Set Log Level
+```
+GET /api/logs/level
+POST /api/logs/level
+Content-Type: application/json
+
+{"level": 3}
+```
+
+Log levels: 0=None, 1=Error, 2=Warning, 3=Info, 4=Debug, 5=Verbose
+
+### Authentication
+
+#### Get Auth Config
+```
+GET /api/config/auth
+```
+
+Returns `{"enabled": true, "username": "admin"}`
+
+#### Set Auth Config
+```
+POST /api/config/auth
+Content-Type: application/json
+
+{"enabled": true, "username": "admin", "password": "secret"}
+```
+
+Leave password blank to keep current password when updating.
 
 ### OTA Updates
 
@@ -225,6 +282,52 @@ rest_command:
 1. Navigate to `/ota` page
 2. Select the `.bin` firmware file
 3. Click "Upload & Flash"
+
+## Security
+
+By default, the web interface is open (no authentication required). To enable password protection:
+
+1. Go to `/config` → Security section
+2. Check "Enable password protection"
+3. Set username and password
+4. Click "Save Security Settings"
+
+When enabled, unauthorized access redirects to a login page. Sessions are stored in a cookie and expire after 24 hours.
+
+### API Authentication
+
+Protected API endpoints return `401 Unauthorized` with JSON body containing `{"login_required": true}` when authentication is enabled but user is not logged in.
+
+#### Auth Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/login` | GET | Login page (no auth required) |
+| `/api/auth/login` | POST | Authenticate with `{"username":"...", "password":"..."}` |
+| `/api/auth/logout` | POST | Destroy session |
+| `/api/auth/status` | GET | Check if logged in |
+
+### Home Assistant with Authentication
+
+If auth is enabled, you need to manage cookies/sessions for REST integrations. For simpler setups, consider disabling auth and using network-level security (VLAN, firewall rules).
+
+## Technical Notes
+
+### Optimized Temperature Reading
+
+The firmware uses the 1-Wire **skip ROM** command (`0xCC`) to trigger temperature conversion on all DS18B20 sensors simultaneously, then reads each sensor individually. This reduces read time from O(n × delay) to O(delay + n × read):
+
+| Sensors | Sequential | Parallel |
+|---------|------------|----------|
+| 1       | ~800ms     | ~800ms   |
+| 5       | ~4000ms    | ~850ms   |
+| 10      | ~8000ms    | ~900ms   |
+
+The delay depends on resolution (12-bit = 750ms max, but typically ~800ms total including bus operations).
+
+### Log Buffer
+
+A 16KB circular buffer captures ESP-IDF logs for web display. Noisy system components (HTTP server internals, Ethernet MAC, etc.) are filtered to keep logs useful. The buffer can be viewed, cleared, and downloaded from the config page.
 
 ## Version History
 

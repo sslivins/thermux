@@ -323,6 +323,30 @@
             <pre id="log-output" style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; font-family: monospace; font-size: 0.8em; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; color: #aaa;">Click "Refresh" to load logs...</pre>
         </div>
 
+        <div class="config-section">
+            <div class="section-title">🔒 Security</div>
+            <div id="auth-session-info" style="display: none; margin-bottom: 15px; padding: 12px; background: rgba(77, 166, 255, 0.1); border-radius: 8px; border: 1px solid rgba(77, 166, 255, 0.3);">
+                <span style="color: #4da6ff;">👤 Logged in as: <strong id="logged-in-user"></strong></span>
+                <button class="btn btn-secondary" onclick="logout()" style="margin-left: 15px; padding: 6px 12px; font-size: 0.85em;">Logout</button>
+            </div>
+            <div class="form-group">
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
+                    <label style="display: flex; align-items: center; gap: 8px; color: #ccc; cursor: pointer;">
+                        <input type="checkbox" id="auth-enabled" style="width: auto;">
+                        Enable password protection
+                    </label>
+                </div>
+                <div id="auth-fields">
+                    <label>Username</label>
+                    <input type="text" id="auth-username" placeholder="admin" autocomplete="username">
+                    <label>Password</label>
+                    <input type="password" id="auth-password" placeholder="Enter new password" autocomplete="new-password">
+                    <div class="form-hint">Leave password blank to keep current password</div>
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="saveAuthConfig()">💾 Save Security Settings</button>
+        </div>
+
         <div class="config-section danger-zone">
             <div class="section-title">⚠️ System</div>
             <p style="margin-bottom: 15px; color: #ccc;">Device restart is required after changing WiFi settings.</p>
@@ -377,6 +401,13 @@
                 document.getElementById('read-interval').value = sensor.read_interval / 1000;
                 document.getElementById('publish-interval').value = sensor.publish_interval / 1000;
                 document.getElementById('resolution').value = sensor.resolution;
+                
+                /* Load auth config */
+                const authResp = await fetch('/api/config/auth', {cache: 'no-store'});
+                const auth = await authResp.json();
+                document.getElementById('auth-enabled').checked = auth.enabled;
+                document.getElementById('auth-username').value = auth.username || '';
+                document.getElementById('auth-fields').style.display = auth.enabled ? 'block' : 'none';
             } catch (err) {
                 showToast('Failed to load configuration', true);
             }
@@ -985,6 +1016,67 @@
             } catch (err) { showToast('Factory reset initiated'); }
         }
 
+        async function saveAuthConfig() {
+            const enabled = document.getElementById('auth-enabled').checked;
+            const username = document.getElementById('auth-username').value.trim();
+            const password = document.getElementById('auth-password').value;
+            
+            if (enabled && !username) {
+                showToast('Username is required when auth is enabled', true);
+                return;
+            }
+            
+            const body = { enabled, username };
+            if (password) body.password = password;
+            
+            try {
+                const resp = await fetch('/api/config/auth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (resp.ok) {
+                    showToast('Security settings saved');
+                    document.getElementById('auth-password').value = '';
+                    loadAuthStatus();  /* Refresh auth display */
+                } else {
+                    showToast('Failed to save security settings', true);
+                }
+            } catch (err) {
+                showToast('Error saving security settings', true);
+            }
+        }
+
+        async function logout() {
+            try {
+                await fetch('/api/auth/logout', { method: 'POST' });
+                window.location.href = '/login';
+            } catch (err) {
+                showToast('Logout failed', true);
+            }
+        }
+
+        async function loadAuthStatus() {
+            try {
+                const resp = await fetch('/api/auth/status');
+                const data = await resp.json();
+                const sessionInfo = document.getElementById('auth-session-info');
+                if (data.auth_enabled && data.logged_in) {
+                    document.getElementById('logged-in-user').textContent = data.username || 'admin';
+                    sessionInfo.style.display = 'block';
+                } else {
+                    sessionInfo.style.display = 'none';
+                }
+            } catch (err) {
+                console.log('Auth status check failed');
+            }
+        }
+
+        /* Toggle auth fields visibility */
+        document.getElementById('auth-enabled').addEventListener('change', function() {
+            document.getElementById('auth-fields').style.display = this.checked ? 'block' : 'none';
+        });
+
         function showToast(message, isError = false) {
             const toast = document.getElementById('toast');
             toast.textContent = message;
@@ -994,6 +1086,7 @@
 
         loadConfig();
         loadLogLevel();
+        loadAuthStatus();
     </script>
 </body>
 </html>
