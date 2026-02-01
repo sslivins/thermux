@@ -593,7 +593,8 @@
                         let result;
                         try { result = JSON.parse(xhr.responseText); } catch(e) { result = {}; }
                         if (result.success) {
-                            simulateProgress(progressFill, updateStatus, 'Installing firmware...', 95);
+                            /* Manual upload reboots immediately - skip OTA status polling */
+                            simulateProgress(progressFill, updateStatus, 'Firmware uploaded, restarting...', 95, true);
                         } else {
                             updateStatus.textContent = '✗ ' + (result.message || 'Upload failed');
                             updateStatus.className = 'update-status';
@@ -623,24 +624,25 @@
             }
         }
 
-        function simulateProgress(progressFill, updateStatus, initialMsg, startPercent = 0) {
+        function simulateProgress(progressFill, updateStatus, initialMsg, startPercent = 0, skipOtaStatus = false) {
             updateStatus.textContent = initialMsg;
             progressFill.style.width = startPercent + '%';
             progressFill.textContent = startPercent + '%';
             
             /* Start waiting for reboot immediately - waitForReboot() handles detecting 
                when the device actually goes offline (after OTA download completes) */
-            waitForReboot(startPercent);
+            waitForReboot(startPercent, skipOtaStatus);
         }
 
-        async function waitForReboot(startPercent = 0) {
+        async function waitForReboot(startPercent = 0, skipOtaStatus = false) {
             const updateStatus = document.getElementById('update-status');
             const progressFill = document.getElementById('progress-fill');
             const maxOfflineAttempts = 90; /* Wait up to 3 minutes for device to go offline (OTA download can be slow) */
             const maxOnlineAttempts = 60;  /* Wait up to 2 minutes for device to come back */
             
             /* Phase 1: Wait for device to go OFFLINE (confirms reboot started)
-               Uses real download progress from device when available
+               For manual uploads (skipOtaStatus=true), device reboots immediately after response.
+               For GitHub OTA, poll /api/ota/status to track download progress.
                
                update_state values from backend:
                  0 = idle (not started yet)
@@ -655,14 +657,17 @@
                 offlineAttempts++;
                 
                 try {
-                    const response = await fetch('/api/ota/status', { 
+                    /* For manual upload, just check if device is reachable (it reboots immediately) */
+                    const endpoint = skipOtaStatus ? '/api/status' : '/api/ota/status';
+                    const response = await fetch(endpoint, { 
                         method: 'GET', 
                         signal: AbortSignal.timeout(2000),
                         cache: 'no-store'
                     });
                     if (!response.ok) {
                         deviceWentOffline = true;
-                    } else {
+                    } else if (!skipOtaStatus) {
+                        /* GitHub OTA: track download progress */
                         const status = await response.json();
                         const state = status.update_state;
                         const downloadPct = status.download_progress || 0;
@@ -698,6 +703,7 @@
                             updateStatus.textContent = 'Starting update...';
                         }
                     }
+                    /* Manual upload: device still responding, keep waiting for it to reboot */
                 } catch (e) {
                     /* Network error = device is offline */
                     deviceWentOffline = true;
@@ -738,16 +744,17 @@
                         signal: AbortSignal.timeout(2000),
                         cache: 'no-store'
                     });
-                    if (response.ok) {
-                        clearInterval(checkInterval);
-                        progressFill.style.width = '100%';
-                        progressFill.textContent = '100%';
-                        updateStatus.textContent = '✓ Update complete! Refreshing...';
-                        updateStatus.className = 'update-status available';
-                        /* Force hard reload bypassing cache */
-                        setTimeout(() => location.href = location.href.split('?')[0] + '?t=' + Date.now(), 1000);
-                        return;
-                    }
+                    /* Any response (even 401 Unauthorized) means device is back online.
+                       Session will be invalid after reboot, so we just need to detect
+                       that the device is responding, then redirect to trigger re-auth. */
+                    clearInterval(checkInterval);
+                    progressFill.style.width = '100%';
+                    progressFill.textContent = '100%';
+                    updateStatus.textContent = '✓ Update complete! Refreshing...';
+                    updateStatus.className = 'update-status available';
+                    /* Force hard reload bypassing cache - will redirect to login if needed */
+                    setTimeout(() => location.href = location.href.split('?')[0] + '?t=' + Date.now(), 1000);
+                    return;
                 } catch (e) { /* Device still rebooting */ }
                 updateStatus.textContent = 'Waiting for device to restart...';
                 if (onlineAttempts >= maxOnlineAttempts) {
