@@ -250,10 +250,20 @@
         let updateInterval;
         let isEditing = false;
 
+        /* Check for auth errors and redirect to login if session expired */
+        function checkAuthError(response) {
+            if (response.status === 401) {
+                window.location.href = '/login?redirect=' + encodeURIComponent(window.location.pathname);
+                return true;
+            }
+            return false;
+        }
+
         async function fetchSensors() {
             if (isEditing) return;
             try {
                 const response = await fetch('/api/sensors');
+                if (checkAuthError(response)) return;
                 const newSensors = await response.json();
                 
                 /* Calculate changes from previous readings */
@@ -287,6 +297,7 @@
         async function fetchStatus() {
             try {
                 const response = await fetch('/api/status');
+                if (checkAuthError(response)) return;
                 const status = await response.json();
                 document.getElementById('version').textContent = 'Version ' + status.version;
                 document.getElementById('mqtt-status').textContent = status.mqtt_connected ? 'Online' : 'Offline';
@@ -366,6 +377,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ friendly_name: name })
                 });
+                if (checkAuthError(response)) return;
                 if (response.ok) {
                     showToast('Name saved successfully');
                     fetchSensors();
@@ -381,6 +393,7 @@
             try {
                 showToast('Scanning for sensors...');
                 const response = await fetch('/api/sensors/rescan', { method: 'POST' });
+                if (checkAuthError(response)) return;
                 if (response.ok) {
                     showToast('Scan complete');
                     fetchSensors();

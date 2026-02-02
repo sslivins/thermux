@@ -372,9 +372,18 @@
         let isUpdating = false;
         let selectedFile = null;
 
+        function checkAuthError(response) {
+            if (response.status === 401) {
+                window.location.href = '/login?redirect=' + encodeURIComponent(window.location.pathname);
+                return true;
+            }
+            return false;
+        }
+
         async function loadConfig() {
             try {
                 const wifiResp = await fetch('/api/config/wifi');
+                if (checkAuthError(wifiResp)) return;
                 const wifi = await wifiResp.json();
                 document.getElementById('wifi-ssid-current').textContent = 'Current: ' + (wifi.ssid || 'Not set');
                 document.getElementById('wifi-ssid').placeholder = wifi.ssid || 'Enter WiFi network name';
@@ -839,6 +848,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ ssid, password })
                 });
+                if (checkAuthError(resp)) return;
                 if (resp.ok) { showToast('WiFi settings saved. Restart to apply.'); loadConfig(); }
                 else { showToast('Failed to save WiFi settings', true); }
             } catch (err) { showToast('Error saving WiFi settings', true); }
@@ -856,6 +866,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ uri, username, password })
                 });
+                if (checkAuthError(resp)) return;
                 if (resp.ok) { showToast('MQTT settings saved'); loadConfig(); }
                 else { showToast('Failed to save MQTT settings', true); }
             } catch (err) { showToast('Error saving MQTT settings', true); }
@@ -874,6 +885,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ read_interval: readInterval, publish_interval: publishInterval, resolution: resolution })
                 });
+                if (checkAuthError(resp)) return;
                 if (resp.ok) { showToast('Sensor settings saved'); loadConfig(); }
                 else { showToast('Failed to save sensor settings', true); }
             } catch (err) { showToast('Error saving sensor settings', true); }
@@ -893,6 +905,7 @@
         async function refreshLogs() {
             try {
                 const resp = await fetch('/api/logs');
+                if (checkAuthError(resp)) return;
                 const logs = await resp.text();
                 const output = document.getElementById('log-output');
                 output.textContent = logs || '(No logs yet)';
@@ -911,7 +924,8 @@
 
         async function clearLogs() {
             try {
-                await fetch('/api/logs/clear', { method: 'POST' });
+                const resp = await fetch('/api/logs/clear', { method: 'POST' });
+                if (checkAuthError(resp)) return;
                 document.getElementById('log-output').textContent = '(Logs cleared)';
                 document.getElementById('copy-logs-btn').disabled = true;
                 document.getElementById('download-logs-btn').disabled = true;
@@ -982,6 +996,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ level: parseInt(level) })
                 });
+                if (checkAuthError(resp)) return;
                 if (resp.ok) {
                     const levelNames = ['None', 'Error', 'Warning', 'Info', 'Debug', 'Verbose'];
                     showToast('Log level set to ' + levelNames[level]);
@@ -1028,6 +1043,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
                 });
+                if (checkAuthError(resp)) return;
                 const result = await resp.json();
                 if (resp.ok) {
                     showToast('Security settings saved');
@@ -1099,6 +1115,7 @@
                 const resp = await fetch('/api/config/auth/regenerate-key', {
                     method: 'POST'
                 });
+                if (checkAuthError(resp)) return;
                 const result = await resp.json();
                 if (resp.ok && result.success) {
                     document.getElementById('api-key').value = result.api_key;

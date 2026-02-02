@@ -36,10 +36,16 @@ static bool s_auth_enabled = false;
 static char s_auth_username[33] = "";
 static char s_auth_password[65] = "";
 
-/* Session management - simple single-session approach for embedded device */
-static char s_session_token[33] = "";  /* Random hex token */
-static int64_t s_session_expiry = 0;   /* Session expiry time (esp_timer ticks) */
+/* Session management - supports multiple concurrent sessions */
+#define MAX_SESSIONS 4
 #define SESSION_TIMEOUT_MS (24 * 60 * 60 * 1000)  /* 24 hours */
+
+typedef struct {
+    char token[33];      /* Random hex token */
+    int64_t expiry;      /* Expiry time (ms since boot) */
+} session_t;
+
+static session_t s_sessions[MAX_SESSIONS] = {0};
 
 /* API key for stateless API access */
 static char s_api_key[65] = "";  /* 32 hex chars (128-bit key) */
@@ -94,18 +100,46 @@ static void load_auth_config(void)
 }
 
 /**
- * @brief Generate a random session token
+ * @brief Generate a random session token and store in an available slot
+ * @return Pointer to the token string (valid until session expires/replaced)
  */
-static void generate_session_token(void)
+static const char* generate_session_token(void)
 {
+    int64_t now = esp_timer_get_time() / 1000;
+    int slot = -1;
+    int64_t oldest_expiry = INT64_MAX;
+    int oldest_slot = 0;
+    
+    /* Find empty/expired slot, or track oldest for replacement */
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (s_sessions[i].token[0] == '\0' || now > s_sessions[i].expiry) {
+            slot = i;
+            break;
+        }
+        if (s_sessions[i].expiry < oldest_expiry) {
+            oldest_expiry = s_sessions[i].expiry;
+            oldest_slot = i;
+        }
+    }
+    
+    /* Use oldest slot if no empty/expired found */
+    if (slot < 0) {
+        slot = oldest_slot;
+        ESP_LOGD(TAG, "Replacing oldest session in slot %d", slot);
+    }
+    
+    /* Generate random token */
     uint32_t rnd[4];
     for (int i = 0; i < 4; i++) {
         rnd[i] = esp_random();
     }
-    snprintf(s_session_token, sizeof(s_session_token), "%08lx%08lx%08lx%08lx",
+    snprintf(s_sessions[slot].token, sizeof(s_sessions[slot].token), "%08lx%08lx%08lx%08lx",
              (unsigned long)rnd[0], (unsigned long)rnd[1], 
              (unsigned long)rnd[2], (unsigned long)rnd[3]);
-    s_session_expiry = esp_timer_get_time() / 1000 + SESSION_TIMEOUT_MS;
+    s_sessions[slot].expiry = now + SESSION_TIMEOUT_MS;
+    
+    ESP_LOGD(TAG, "Created session in slot %d", slot);
+    return s_sessions[slot].token;
 }
 
 /**
@@ -163,18 +197,18 @@ static bool is_session_valid(httpd_req_t *req)
     token[i] = '\0';
     free(cookie);
 
-    /* Verify token and check expiry */
-    if (strlen(s_session_token) == 0) {
-        return false;
-    }
-    
+    /* Check token against all sessions */
     int64_t now = esp_timer_get_time() / 1000;
-    if (now > s_session_expiry) {
-        s_session_token[0] = '\0';  /* Clear expired session */
-        return false;
+    for (int j = 0; j < MAX_SESSIONS; j++) {
+        if (s_sessions[j].token[0] != '\0' && strcmp(token, s_sessions[j].token) == 0) {
+            if (now > s_sessions[j].expiry) {
+                s_sessions[j].token[0] = '\0';  /* Clear expired session */
+                return false;
+            }
+            return true;
+        }
     }
-
-    return strcmp(token, s_session_token) == 0;
+    return false;
 }
 
 /**
@@ -1374,11 +1408,12 @@ static esp_err_t api_auth_login_handler(httpd_req_t *req)
     cJSON *password = cJSON_GetObjectItem(root, "password");
 
     bool success = false;
+    const char *session_token = NULL;
     if (cJSON_IsString(username) && cJSON_IsString(password)) {
         if (strcmp(username->valuestring, s_auth_username) == 0 &&
             strcmp(password->valuestring, s_auth_password) == 0) {
             success = true;
-            generate_session_token();
+            session_token = generate_session_token();
             ESP_LOGI(TAG, "User '%s' logged in", s_auth_username);
         } else {
             ESP_LOGW(TAG, "Failed login attempt for user '%s'", 
@@ -1390,10 +1425,10 @@ static esp_err_t api_auth_login_handler(httpd_req_t *req)
     cJSON *response = cJSON_CreateObject();
     cJSON_AddBoolToObject(response, "success", success);
 
-    if (success) {
+    if (success && session_token) {
         /* Set session cookie */
         char cookie[80];
-        snprintf(cookie, sizeof(cookie), "session=%s; Path=/; HttpOnly; SameSite=Strict", s_session_token);
+        snprintf(cookie, sizeof(cookie), "session=%s; Path=/; HttpOnly; SameSite=Strict", session_token);
         httpd_resp_set_hdr(req, "Set-Cookie", cookie);
     }
 
@@ -1412,9 +1447,32 @@ static esp_err_t api_auth_login_handler(httpd_req_t *req)
  */
 static esp_err_t api_auth_logout_handler(httpd_req_t *req)
 {
-    /* Clear session */
-    s_session_token[0] = '\0';
-    s_session_expiry = 0;
+    /* Get the session token from cookie and clear that specific session */
+    size_t cookie_len = httpd_req_get_hdr_value_len(req, "Cookie");
+    if (cookie_len > 0) {
+        char *cookie = malloc(cookie_len + 1);
+        if (cookie && httpd_req_get_hdr_value_str(req, "Cookie", cookie, cookie_len + 1) == ESP_OK) {
+            char *session_start = strstr(cookie, "session=");
+            if (session_start) {
+                session_start += 8;
+                char token[33] = {0};
+                int i = 0;
+                while (session_start[i] && session_start[i] != ';' && i < 32) {
+                    token[i] = session_start[i];
+                    i++;
+                }
+                /* Find and clear matching session */
+                for (int j = 0; j < MAX_SESSIONS; j++) {
+                    if (strcmp(token, s_sessions[j].token) == 0) {
+                        s_sessions[j].token[0] = '\0';
+                        s_sessions[j].expiry = 0;
+                        break;
+                    }
+                }
+            }
+        }
+        free(cookie);
+    }
     ESP_LOGI(TAG, "User logged out");
 
     /* Clear cookie */
