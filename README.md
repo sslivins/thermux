@@ -295,7 +295,7 @@ By default, the web interface is open (no authentication required). To enable pa
 3. Set username and password
 4. Click "Save Security Settings"
 
-When enabled, unauthorized access redirects to a login page. Sessions are stored in a cookie and expire after 24 hours.
+When enabled, unauthorized access redirects to a login page. Sessions are stored in a cookie and expire after 7 days.
 
 ### API Key Authentication
 

@@ -38,7 +38,7 @@ static char s_auth_password[65] = "";
 
 /* Session management - supports multiple concurrent sessions */
 #define MAX_SESSIONS 4
-#define SESSION_TIMEOUT_MS (24 * 60 * 60 * 1000)  /* 24 hours */
+#define SESSION_TIMEOUT_MS (7LL * 24 * 60 * 60 * 1000)  /* 7 days */
 
 typedef struct {
     char token[33];      /* Random hex token */
