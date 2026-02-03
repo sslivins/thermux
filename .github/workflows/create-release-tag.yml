@@ -1,0 +1,64 @@
+name: Create Release Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (check version without creating tag)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history to check existing tags
+
+      - name: Extract version from main.c
+        id: version
+        run: |
+          VERSION=$(grep -oP 'APP_VERSION\s*=\s*"\K[^"]+' main/main.c)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not extract APP_VERSION from main/main.c"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Found version: $VERSION (tag: v$VERSION)"
+
+      - name: Check if tag already exists
+        id: check_tag
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists!"
+            echo "exists=true" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "✅ Tag $TAG does not exist yet"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git tag -a "$TAG" -m "Release $VERSION"
+          git push origin "$TAG"
+          
+          echo "🚀 Created and pushed tag: $TAG"
+
+      - name: Dry run summary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "🔍 Dry run complete - would create tag: ${{ steps.version.outputs.tag }}"
+          echo "No tag was created."
