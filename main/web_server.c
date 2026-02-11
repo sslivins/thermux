@@ -337,6 +337,15 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "ethernet_ip", eth_connected ? ethernet_manager_get_ip() : "");
     cJSON_AddStringToObject(root, "wifi_ip", wifi_connected ? wifi_manager_get_ip() : "");
 
+    /* Bus error statistics */
+    uint32_t total_reads, failed_reads;
+    onewire_temp_get_error_stats(&total_reads, &failed_reads);
+    cJSON *bus_stats = cJSON_CreateObject();
+    cJSON_AddNumberToObject(bus_stats, "total_reads", total_reads);
+    cJSON_AddNumberToObject(bus_stats, "failed_reads", failed_reads);
+    cJSON_AddNumberToObject(bus_stats, "error_rate", total_reads > 0 ? (double)failed_reads / total_reads * 100.0 : 0.0);
+    cJSON_AddItemToObject(root, "bus_stats", bus_stats);
+
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
 
@@ -394,6 +403,27 @@ static esp_err_t api_sensors_rescan_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "success", err == ESP_OK);
     cJSON_AddNumberToObject(root, "sensor_count", sensor_manager_get_count());
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/sensors/error-stats/reset
+ */
+static esp_err_t api_error_stats_reset_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    onewire_temp_reset_error_stats();
+    
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -1725,6 +1755,13 @@ esp_err_t web_server_start(void)
         .handler = api_sensors_rescan_handler,
     };
     REGISTER_URI(rescan_uri);
+
+    httpd_uri_t error_stats_reset_uri = {
+        .uri = "/api/sensors/error-stats/reset",
+        .method = HTTP_POST,
+        .handler = api_error_stats_reset_handler,
+    };
+    REGISTER_URI(error_stats_reset_uri);
 
     httpd_uri_t sensor_name_uri = {
         .uri = "/api/sensors/*",

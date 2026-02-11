@@ -21,6 +21,10 @@ static ds18b20_device_handle_t *s_ds18b20_handles = NULL;
 static int s_device_count = 0;
 static int s_resolution = 12;
 
+/* Bus error statistics */
+static uint32_t s_total_reads = 0;
+static uint32_t s_failed_reads = 0;
+
 /* DS18B20 family code and commands */
 #define DS18B20_FAMILY_CODE     0x28
 #define DS18B20_CMD_CONVERT     0x44
@@ -189,12 +193,14 @@ esp_err_t onewire_temp_read_all(onewire_sensor_t *sensors, int sensor_count)
     for (int i = 0; i < sensor_count && i < s_device_count; i++) {
         if (s_ds18b20_handles[i] != NULL) {
             float temp;
+            s_total_reads++;
             err = ds18b20_get_temperature(s_ds18b20_handles[i], &temp);
             if (err == ESP_OK) {
                 sensors[i].temperature = temp;
                 sensors[i].valid = true;
                 sensors[i].last_read_time = now;
             } else {
+                s_failed_reads++;
                 sensors[i].valid = false;
                 result = err;
                 ESP_LOGW(TAG, "Failed to read sensor %d", i);
@@ -218,6 +224,19 @@ void onewire_address_to_string(const uint8_t *address, char *str)
 int onewire_temp_get_resolution(void)
 {
     return s_resolution;
+}
+
+void onewire_temp_get_error_stats(uint32_t *total_reads, uint32_t *failed_reads)
+{
+    if (total_reads) *total_reads = s_total_reads;
+    if (failed_reads) *failed_reads = s_failed_reads;
+}
+
+void onewire_temp_reset_error_stats(void)
+{
+    s_total_reads = 0;
+    s_failed_reads = 0;
+    ESP_LOGI(TAG, "Error statistics reset");
 }
 
 esp_err_t onewire_temp_set_resolution(int bits)

@@ -131,6 +131,31 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /api/sensors/error-stats/reset:
+    post:
+      tags:
+        - Sensors
+      summary: Reset bus error statistics
+      description: Resets the 1-Wire bus error counters (total reads and failed reads) to zero.
+      operationId: resetErrorStats
+      security:
+        - sessionCookie: []
+        - apiKey: []
+      responses:
+        '200':
+          description: Statistics reset successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                example:
+                  success: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /api/sensors/{address}/name:
     post:
       tags:
@@ -1077,6 +1102,23 @@ components:
           type: string
           description: WiFi IP address (empty if not connected)
           example: ""
+        bus_stats:
+          type: object
+          description: 1-Wire bus error statistics
+          properties:
+            total_reads:
+              type: integer
+              description: Total individual sensor read attempts since last reset
+              example: 1500
+            failed_reads:
+              type: integer
+              description: Number of failed reads (CRC errors, etc.)
+              example: 3
+            error_rate:
+              type: number
+              format: double
+              description: Error rate as a percentage (failed/total * 100)
+              example: 0.2
 
     Sensor:
       type: object

@@ -67,4 +67,16 @@ int onewire_temp_get_resolution(void);
  */
 esp_err_t onewire_temp_set_resolution(int bits);
 
+/**
+ * @brief Get bus error statistics
+ * @param total_reads Output: total individual sensor reads attempted
+ * @param failed_reads Output: number of failed reads (CRC errors, etc.)
+ */
+void onewire_temp_get_error_stats(uint32_t *total_reads, uint32_t *failed_reads);
+
+/**
+ * @brief Reset bus error statistics counters to zero
+ */
+void onewire_temp_reset_error_stats(void);
+
 #endif /* ONEWIRE_TEMP_H */

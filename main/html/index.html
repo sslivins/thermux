@@ -210,6 +210,9 @@
             <div class="status-item">
                 MQTT: <span id="mqtt-status" class="status-offline">Offline</span>
             </div>
+            <div class="status-item" title="Click to reset" style="cursor: pointer;" onclick="resetErrorStats()">
+                Bus Errors: <span id="bus-error-rate">-</span>
+            </div>
             <div class="status-item">
                 Last Update: <span id="last-update">-</span>
             </div>
@@ -301,6 +304,18 @@
                 document.getElementById('version').textContent = 'Version ' + status.version;
                 document.getElementById('mqtt-status').textContent = status.mqtt_connected ? 'Online' : 'Offline';
                 document.getElementById('mqtt-status').className = status.mqtt_connected ? 'status-online' : 'status-offline';
+                /* Update bus error stats */
+                if (status.bus_stats) {
+                    const s = status.bus_stats;
+                    const el = document.getElementById('bus-error-rate');
+                    if (s.total_reads === 0) {
+                        el.textContent = 'No data';
+                        el.className = '';
+                    } else {
+                        el.textContent = s.error_rate.toFixed(2) + '% (' + s.failed_reads + '/' + s.total_reads + ')';
+                        el.className = s.failed_reads > 0 ? 'status-offline' : 'status-online';
+                    }
+                }
             } catch (err) {
                 console.error('Failed to fetch status');
             }
@@ -404,6 +419,21 @@
             }
         }
 
+        async function resetErrorStats() {
+            try {
+                const response = await fetch('/api/sensors/error-stats/reset', { method: 'POST' });
+                if (checkAuthError(response)) return;
+                if (response.ok) {
+                    showToast('Error stats reset');
+                    fetchStatus();
+                } else {
+                    showToast('Failed to reset stats', true);
+                }
+            } catch (err) {
+                showToast('Error resetting stats', true);
+            }
+        }
+
         function showToast(message, isError = false) {
             const toast = document.getElementById('toast');
             toast.textContent = message;
@@ -413,7 +443,7 @@
 
         fetchStatus();
         fetchSensors();
-        updateInterval = setInterval(fetchSensors, 5000);
+        updateInterval = setInterval(() => { fetchSensors(); fetchStatus(); }, 5000);
     </script>
 </body>
 </html>
