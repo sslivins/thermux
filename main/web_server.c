@@ -1339,6 +1339,7 @@ static const char *login_html =
 ".form-group{margin-bottom:20px}"
 "label{display:block;color:#aaa;margin-bottom:8px;font-size:0.9em}"
 "input{width:100%;padding:12px 16px;border:1px solid rgba(255,255,255,0.1);border-radius:8px;background:rgba(0,0,0,0.2);color:#fff;font-size:1em;transition:border-color 0.2s}"
+"input::-ms-reveal{filter:invert(1)}input::-webkit-credentials-auto-fill-button{filter:invert(1)}"
 "input:focus{outline:none;border-color:#4da6ff}"
 ".btn{width:100%;padding:14px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);border:none;border-radius:8px;color:#fff;font-size:1em;font-weight:600;cursor:pointer;transition:transform 0.2s,box-shadow 0.2s}"
 ".btn:hover{transform:translateY(-2px);box-shadow:0 4px 20px rgba(102,126,234,0.4)}"
