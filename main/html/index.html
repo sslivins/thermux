@@ -371,6 +371,7 @@
                     <div class="sensor-address">${sensor.address}</div>
                     <div class="sensor-temp">${sensor.valid ? sensor.temperature.toFixed(1) + '°C' : '--.-°C'}</div>
                     ${changeHtml}
+                    <div class="sensor-error-rate" style="font-size:0.8em;color:${sensor.failed_reads > 0 ? '#f87171' : '#4ade80'};margin-top:5px;">Errors: ${sensor.total_reads > 0 ? (sensor.failed_reads / sensor.total_reads * 100).toFixed(2) + '% (' + sensor.failed_reads + '/' + sensor.total_reads + ')' : 'No data'}</div>
                     <input type="text" class="sensor-name-input" 
                            placeholder="Enter friendly name" 
                            value="${sensor.friendly_name || ''}"

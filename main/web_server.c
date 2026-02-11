@@ -379,6 +379,9 @@ static esp_err_t api_sensors_get_handler(httpd_req_t *req)
             cJSON_AddNullToObject(sensor, "friendly_name");
         }
         
+        cJSON_AddNumberToObject(sensor, "total_reads", sensors[i].hw_sensor.total_reads);
+        cJSON_AddNumberToObject(sensor, "failed_reads", sensors[i].hw_sensor.failed_reads);
+        
         cJSON_AddItemToArray(root, sensor);
     }
 

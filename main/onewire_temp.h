@@ -20,6 +20,8 @@ typedef struct {
     float temperature;                    /**< Last read temperature in Celsius */
     bool valid;                           /**< True if last reading was valid */
     int64_t last_read_time;              /**< Timestamp of last reading */
+    uint32_t total_reads;                /**< Total read attempts for this sensor */
+    uint32_t failed_reads;               /**< Failed read count for this sensor */
 } onewire_sensor_t;
 
 /**

@@ -127,6 +127,8 @@ esp_err_t sensor_manager_read_all(void)
         s_sensors[i].hw_sensor.temperature = hw_sensors[i].temperature;
         s_sensors[i].hw_sensor.valid = hw_sensors[i].valid;
         s_sensors[i].hw_sensor.last_read_time = hw_sensors[i].last_read_time;
+        s_sensors[i].hw_sensor.total_reads = hw_sensors[i].total_reads;
+        s_sensors[i].hw_sensor.failed_reads = hw_sensors[i].failed_reads;
         
         if (hw_sensors[i].valid) {
             const char *name = s_sensors[i].has_friendly_name ? 

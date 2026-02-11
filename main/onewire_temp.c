@@ -95,6 +95,8 @@ esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *fou
         sensors[count].valid = false;
         sensors[count].temperature = 0.0f;
         sensors[count].last_read_time = 0;
+        sensors[count].total_reads = 0;
+        sensors[count].failed_reads = 0;
 
         /* Create DS18B20 device handle */
         ds18b20_config_t ds18b20_config = {};
@@ -194,6 +196,7 @@ esp_err_t onewire_temp_read_all(onewire_sensor_t *sensors, int sensor_count)
         if (s_ds18b20_handles[i] != NULL) {
             float temp;
             s_total_reads++;
+            sensors[i].total_reads++;
             err = ds18b20_get_temperature(s_ds18b20_handles[i], &temp);
             if (err == ESP_OK) {
                 sensors[i].temperature = temp;
@@ -201,6 +204,7 @@ esp_err_t onewire_temp_read_all(onewire_sensor_t *sensors, int sensor_count)
                 sensors[i].last_read_time = now;
             } else {
                 s_failed_reads++;
+                sensors[i].failed_reads++;
                 sensors[i].valid = false;
                 result = err;
                 ESP_LOGW(TAG, "Failed to read sensor %d", i);
