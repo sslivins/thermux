@@ -3,7 +3,7 @@
 /dependencies.lock
 sdkconfig.old
 .clangd
-main/html_min/
+main/html_gz/
 
 # Python
 __pycache__/

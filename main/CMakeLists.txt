@@ -1,32 +1,31 @@
-# Minify HTML files at build time
+# Gzip HTML files at build time
 set(HTML_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/html")
-set(HTML_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/html_min")
+set(HTML_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/html_gz")
 
-# Create minified output directory
+# Create gzipped output directory
 file(MAKE_DIRECTORY ${HTML_BUILD_DIR})
 
 # Find Python
 find_package(Python3 REQUIRED)
 
-# Run HTML minification during configuration
-# Note: If you edit HTML files, run: python scripts/html_minifier.py main/html main/html_min
+# Run HTML gzip compression during configuration
+# Note: If you edit HTML files, run: python scripts/gzip_html.py main/html main/html_gz
 # Or do a full clean build: idf.py fullclean && idf.py build
 execute_process(
-    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/html_minifier.py" 
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gzip_html.py" 
             "${HTML_SRC_DIR}" "${HTML_BUILD_DIR}"
-    RESULT_VARIABLE MINIFY_RESULT
-    OUTPUT_VARIABLE MINIFY_OUTPUT
-    ERROR_VARIABLE MINIFY_ERROR
+    RESULT_VARIABLE GZIP_RESULT
+    OUTPUT_VARIABLE GZIP_OUTPUT
+    ERROR_VARIABLE GZIP_ERROR
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-if(NOT MINIFY_RESULT EQUAL 0)
-    message(WARNING "HTML minification failed: ${MINIFY_ERROR}")
-    # Fall back to using unminified files directly
-    set(HTML_BUILD_DIR ${HTML_SRC_DIR})
+if(NOT GZIP_RESULT EQUAL 0)
+    message(WARNING "HTML gzip compression failed: ${GZIP_ERROR}")
+    message(FATAL_ERROR "Cannot build without gzipped HTML files")
 else()
-    message(STATUS "HTML minification:")
-    message(STATUS "${MINIFY_OUTPUT}")
+    message(STATUS "HTML gzip compression:")
+    message(STATUS "${GZIP_OUTPUT}")
 endif()
 
 idf_component_register(
@@ -58,6 +57,7 @@ idf_component_register(
         driver
     EMBED_TXTFILES
         "certs/github_root_ca.pem"
-        "${HTML_BUILD_DIR}/index.html"
-        "${HTML_BUILD_DIR}/config.html"
+    EMBED_FILES
+        "${HTML_BUILD_DIR}/index.html.gz"
+        "${HTML_BUILD_DIR}/config.html.gz"
 )

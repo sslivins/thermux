@@ -60,11 +60,11 @@ extern esp_err_t mqtt_ha_start(void);
 /* Forward declarations */
 static void generate_api_key(void);
 
-/* Embedded HTML files (minified at build time) */
-extern const uint8_t index_html_start[] asm("_binary_index_html_start");
-extern const uint8_t index_html_end[] asm("_binary_index_html_end");
-extern const uint8_t config_html_start[] asm("_binary_config_html_start");
-extern const uint8_t config_html_end[] asm("_binary_config_html_end");
+/* Embedded HTML files (gzipped at build time) */
+extern const uint8_t index_html_gz_start[] asm("_binary_index_html_gz_start");
+extern const uint8_t index_html_gz_end[] asm("_binary_index_html_gz_end");
+extern const uint8_t config_html_gz_start[] asm("_binary_config_html_gz_start");
+extern const uint8_t config_html_gz_end[] asm("_binary_config_html_gz_end");
 
 /**
  * @brief Load auth config from NVS (called at startup)
@@ -307,7 +307,8 @@ static esp_err_t index_get_handler(httpd_req_t *req)
 {
     CHECK_PAGE_AUTH(req);
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, (const char *)index_html_start, index_html_end - index_html_start);
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_send(req, (const char *)index_html_gz_start, index_html_gz_end - index_html_gz_start);
     return ESP_OK;
 }
 
@@ -490,7 +491,8 @@ static esp_err_t config_get_handler(httpd_req_t *req)
 {
     CHECK_PAGE_AUTH(req);
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, (const char *)config_html_start, config_html_end - config_html_start);
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_send(req, (const char *)config_html_gz_start, config_html_gz_end - config_html_gz_start);
     return ESP_OK;
 }
 
