@@ -5,7 +5,7 @@ A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assi
 ## Features
 
 - **Up to 20 DS18B20 Sensors** - Monitor multiple temperature points from a single device on one 1-Wire bus
-- **Optimized Parallel Reads** - Uses 1-Wire skip ROM command to read all sensors simultaneously (~240ms for 10 sensors vs ~1200ms sequential)
+- **Optimized Parallel Reads** - Uses 1-Wire skip ROM command to read all sensors simultaneously (~1050ms for 20 sensors in 12-bit mode, ~450ms in 9-bit)
 - **Home Assistant Integration** - MQTT auto-discovery for seamless integration
 - **Web Interface** - Configuration and monitoring via built-in web server
 - **Sensor Identification** - Change detection highlighting helps identify which physical sensor is which
@@ -203,13 +203,14 @@ Alternatively, use the built-in MQTT integration with Home Assistant auto-discov
 
 The firmware uses the 1-Wire **skip ROM** command (`0xCC`) to trigger temperature conversion on all DS18B20 sensors simultaneously, then reads each sensor individually. This reduces read time from O(n × delay) to O(delay + n × read):
 
-| Sensors | Sequential | Parallel |
-|---------|------------|----------|
-| 1       | ~800ms     | ~800ms   |
-| 5       | ~4000ms    | ~850ms   |
-| 10      | ~8000ms    | ~900ms   |
+| Sensors | Sequential (12-bit) | Parallel (12-bit) | Parallel (9-bit) |
+|---------|---------------------|-------------------|-------------------|
+| 1       | ~800ms              | ~800ms            | ~100ms            |
+| 5       | ~4000ms             | ~850ms            | ~150ms            |
+| 10      | ~8000ms             | ~900ms            | ~250ms            |
+| 20      | ~16000ms            | ~1050ms           | ~450ms            |
 
-The delay depends on resolution (12-bit = 750ms max, but typically ~800ms total including bus operations).
+The conversion delay depends on resolution: 12-bit = 750ms, 11-bit = 375ms, 10-bit = 188ms, 9-bit = 94ms. The parallel read overhead per sensor is minimal (~25ms for bus communication).
 
 ### Log Buffer
 
