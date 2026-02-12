@@ -1077,6 +1077,10 @@ components:
           type: integer
           description: Number of discovered temperature sensors
           example: 5
+        max_sensors:
+          type: integer
+          description: Maximum number of sensors supported (CONFIG_MAX_SENSORS)
+          example: 20
         uptime_seconds:
           type: integer
           description: Device uptime in seconds

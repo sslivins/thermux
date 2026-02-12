@@ -119,6 +119,12 @@ esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *fou
     /* Clean up iterator */
     onewire_del_device_iter(iter);
 
+    /* Check if we hit the limit (more devices may be on the bus) */
+    if (count >= max_sensors) {
+        ESP_LOGW(TAG, "Maximum sensor limit reached (%d). Additional sensors on the bus will be ignored. "
+                 "Increase CONFIG_MAX_SENSORS in menuconfig to support more.", max_sensors);
+    }
+
     s_device_count = count;
     *found_count = count;
     

@@ -236,6 +236,8 @@
             </select>
         </div>
 
+        <div id="max-sensor-warning" style="display:none;background:rgba(245,158,11,0.2);border:1px solid #f59e0b;color:#fbbf24;padding:12px 20px;border-radius:10px;margin-bottom:20px;text-align:center;font-size:0.9em;"></div>
+
         <div class="sensors-grid" id="sensors-grid">
             <div class="sensor-card loading">Loading sensors...</div>
         </div>
@@ -315,6 +317,14 @@
                         el.textContent = s.error_rate.toFixed(2) + '% (' + s.failed_reads + '/' + s.total_reads + ')';
                         el.className = s.failed_reads > 0 ? 'status-offline' : 'status-online';
                     }
+                }
+                /* Warn if at max sensor limit */
+                const warn = document.getElementById('max-sensor-warning');
+                if (status.sensor_count >= status.max_sensors) {
+                    warn.textContent = '⚠️ Maximum sensor limit reached (' + status.max_sensors + '). Additional sensors will be ignored. Increase MAX_SENSORS in menuconfig.';
+                    warn.style.display = 'block';
+                } else {
+                    warn.style.display = 'none';
                 }
             } catch (err) {
                 console.error('Failed to fetch status');

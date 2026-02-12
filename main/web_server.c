@@ -323,6 +323,7 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "version", APP_VERSION);
     cJSON_AddNumberToObject(root, "sensor_count", sensor_manager_get_count());
+    cJSON_AddNumberToObject(root, "max_sensors", CONFIG_MAX_SENSORS);
     cJSON_AddNumberToObject(root, "uptime_seconds", esp_log_timestamp() / 1000);
     cJSON_AddNumberToObject(root, "free_heap", esp_get_free_heap_size());
     
