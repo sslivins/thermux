@@ -1140,6 +1140,14 @@ components:
           nullable: true
           description: User-assigned friendly name (null if not set)
           example: "Living Room"
+        total_reads:
+          type: integer
+          description: Total read attempts for this sensor since last reset
+          example: 1500
+        failed_reads:
+          type: integer
+          description: Number of failed reads for this sensor (CRC errors, etc.)
+          example: 0
 
     SensorConfig:
       type: object
