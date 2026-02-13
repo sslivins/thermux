@@ -226,6 +226,7 @@
                 <option value="address">Address</option>
                 <option value="temp">Temperature</option>
                 <option value="change" selected>Recent Change</option>
+                <option value="errors">Error Rate</option>
             </select>
             <label title="Highlight sensors that changed more than this">Threshold:</label>
             <select id="threshold-select" onchange="renderSensors()">
@@ -355,6 +356,13 @@
                     break;
                 case 'change':
                     sortedSensors.sort((a, b) => Math.abs(changeAmounts[b.address] || 0) - Math.abs(changeAmounts[a.address] || 0));
+                    break;
+                case 'errors':
+                    sortedSensors.sort((a, b) => {
+                        const rateA = a.total_reads > 0 ? (a.failed_reads / a.total_reads) : 0;
+                        const rateB = b.total_reads > 0 ? (b.failed_reads / b.total_reads) : 0;
+                        return rateB - rateA;
+                    });
                     break;
             }
             
