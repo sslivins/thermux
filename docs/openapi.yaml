@@ -135,8 +135,10 @@ paths:
     post:
       tags:
         - Sensors
-      summary: Reset bus error statistics
-      description: Resets the 1-Wire bus error counters (total reads and failed reads) to zero.
+      summary: Reset all error statistics
+      description: |
+        Resets the 1-Wire bus error counters (total reads and failed reads) to zero,
+        as well as all per-sensor error statistics.
       operationId: resetErrorStats
       security:
         - sessionCookie: []
@@ -155,6 +157,44 @@ paths:
                   success: true
         '401':
           $ref: '#/components/responses/Unauthorized'
+
+  /api/sensors/{address}/error-stats/reset:
+    post:
+      tags:
+        - Sensors
+      summary: Reset error statistics for a single sensor
+      description: Resets the error counters (total reads and failed reads) for an individual sensor identified by its 1-Wire address.
+      operationId: resetSensorErrorStats
+      security:
+        - sessionCookie: []
+        - apiKey: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          description: The 16-character hex address of the DS18B20 sensor
+          schema:
+            type: string
+            pattern: '^[0-9A-Fa-f]{16}$'
+            example: "28FF1234567890AB"
+      responses:
+        '200':
+          description: Sensor error statistics reset successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                example:
+                  success: true
+        '400':
+          description: Invalid address
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Sensor not found
 
   /api/sensors/{address}/name:
     post:
