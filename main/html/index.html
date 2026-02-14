@@ -389,7 +389,7 @@
                     <div class="sensor-address">${sensor.address}</div>
                     <div class="sensor-temp">${sensor.valid ? sensor.temperature.toFixed(1) + '°C' : '--.-°C'}</div>
                     ${changeHtml}
-                    <div class="sensor-error-rate" style="font-size:0.8em;color:${sensor.failed_reads > 0 ? '#f87171' : '#4ade80'};margin-top:5px;">Errors: ${sensor.total_reads > 0 ? (sensor.failed_reads / sensor.total_reads * 100).toFixed(2) + '% (' + sensor.failed_reads + '/' + sensor.total_reads + ')' : 'No data'}</div>
+                    <div class="sensor-error-rate" style="font-size:0.8em;color:${sensor.failed_reads > 0 ? '#f87171' : '#4ade80'};margin-top:5px;cursor:pointer;" title="Click to reset this sensor's error stats" onclick="resetSensorErrors('${sensor.address}')">Errors: ${sensor.total_reads > 0 ? (sensor.failed_reads / sensor.total_reads * 100).toFixed(2) + '% (' + sensor.failed_reads + '/' + sensor.total_reads + ')' : 'No data'}</div>
                     <input type="text" class="sensor-name-input" 
                            placeholder="Enter friendly name" 
                            value="${sensor.friendly_name || ''}"
@@ -443,13 +443,29 @@
                 const response = await fetch('/api/sensors/error-stats/reset', { method: 'POST' });
                 if (checkAuthError(response)) return;
                 if (response.ok) {
-                    showToast('Error stats reset');
+                    showToast('All error stats reset');
                     fetchStatus();
+                    fetchSensors();
                 } else {
                     showToast('Failed to reset stats', true);
                 }
             } catch (err) {
                 showToast('Error resetting stats', true);
+            }
+        }
+
+        async function resetSensorErrors(address) {
+            try {
+                const response = await fetch('/api/sensors/' + address + '/error-stats/reset', { method: 'POST' });
+                if (checkAuthError(response)) return;
+                if (response.ok) {
+                    showToast('Sensor error stats reset');
+                    fetchSensors();
+                } else {
+                    showToast('Failed to reset sensor stats', true);
+                }
+            } catch (err) {
+                showToast('Error resetting sensor stats', true);
             }
         }
 

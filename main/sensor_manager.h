@@ -73,4 +73,16 @@ const managed_sensor_t* sensor_manager_get_sensor(const char *address_str);
  */
 int sensor_manager_get_count(void);
 
+/**
+ * @brief Reset error stats for all sensors
+ */
+void sensor_manager_reset_all_error_stats(void);
+
+/**
+ * @brief Reset error stats for a specific sensor
+ * @param address_str Sensor address as hex string
+ * @return ESP_OK on success, ESP_ERR_NOT_FOUND if sensor not found
+ */
+esp_err_t sensor_manager_reset_sensor_error_stats(const char *address_str);
+
 #endif /* SENSOR_MANAGER_H */

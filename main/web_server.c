@@ -425,6 +425,7 @@ static esp_err_t api_error_stats_reset_handler(httpd_req_t *req)
 {
     CHECK_AUTH(req);
     onewire_temp_reset_error_stats();
+    sensor_manager_reset_all_error_stats();
     
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "success", true);
@@ -440,14 +441,63 @@ static esp_err_t api_error_stats_reset_handler(httpd_req_t *req)
 }
 
 /**
- * @brief Handler for POST /api/sensors/:address/name
+ * @brief Handler for POST /api/sensors/:address/error-stats/reset
+ */
+static esp_err_t api_sensor_error_stats_reset_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    /* Extract address from URI: /api/sensors/XXXX/error-stats/reset */
+    char address[20] = {0};
+    const char *uri = req->uri;
+    const char *start = strstr(uri, "/api/sensors/");
+    if (start) {
+        start += strlen("/api/sensors/");
+        const char *end = strstr(start, "/error-stats/reset");
+        if (end && (end - start) < sizeof(address)) {
+            strncpy(address, start, end - start);
+        }
+    }
+
+    if (strlen(address) == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid address");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = sensor_manager_reset_sensor_error_stats(address);
+    cJSON *root = cJSON_CreateObject();
+    if (err == ESP_OK) {
+        cJSON_AddBoolToObject(root, "success", true);
+    } else {
+        cJSON_AddBoolToObject(root, "success", false);
+        cJSON_AddStringToObject(root, "error", "Sensor not found");
+    }
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/sensors/:address/name and /api/sensors/:address/error-stats/reset
  */
 static esp_err_t api_sensor_name_handler(httpd_req_t *req)
 {
     CHECK_AUTH(req);
+    const char *uri = req->uri;
+
+    /* Check if this is a per-sensor error stats reset request */
+    if (strstr(uri, "/error-stats/reset")) {
+        return api_sensor_error_stats_reset_handler(req);
+    }
+
+    /* Otherwise handle as name update */
     /* Extract address from URI */
     char address[20] = {0};
-    const char *uri = req->uri;
     
     /* URI format: /api/sensors/XXXX/name */
     const char *start = strstr(uri, "/api/sensors/");

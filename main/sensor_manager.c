@@ -231,3 +231,25 @@ int sensor_manager_get_count(void)
 {
     return s_sensor_count;
 }
+
+void sensor_manager_reset_all_error_stats(void)
+{
+    for (int i = 0; i < s_sensor_count; i++) {
+        s_sensors[i].hw_sensor.total_reads = 0;
+        s_sensors[i].hw_sensor.failed_reads = 0;
+    }
+    ESP_LOGI(TAG, "All per-sensor error stats reset");
+}
+
+esp_err_t sensor_manager_reset_sensor_error_stats(const char *address_str)
+{
+    for (int i = 0; i < s_sensor_count; i++) {
+        if (strcmp(s_sensors[i].address_str, address_str) == 0) {
+            s_sensors[i].hw_sensor.total_reads = 0;
+            s_sensors[i].hw_sensor.failed_reads = 0;
+            ESP_LOGI(TAG, "Error stats reset for %s", address_str);
+            return ESP_OK;
+        }
+    }
+    return ESP_ERR_NOT_FOUND;
+}
