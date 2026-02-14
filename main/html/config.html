@@ -154,12 +154,6 @@
             font-weight: bold;
             min-width: 40px;
         }
-        .file-input-wrapper {
-            position: relative;
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid rgba(255,255,255,0.1);
-        }
         .file-input-label {
             display: block;
             padding: 12px 20px;
@@ -173,6 +167,31 @@
         .file-input-label:hover { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.5); }
         .file-input-label.has-file { border-color: #22c55e; background: rgba(34, 197, 94, 0.1); }
         .file-input { display: none; }
+        .fw-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .fw-tab {
+            flex: 1;
+            padding: 12px 16px;
+            border-radius: 10px;
+            border: 2px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.05);
+            color: #888;
+            cursor: pointer;
+            text-align: center;
+            font-size: 1em;
+            transition: all 0.2s;
+        }
+        .fw-tab:hover { border-color: rgba(255,255,255,0.3); color: #ccc; }
+        .fw-tab.active {
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.1);
+            color: #fff;
+        }
+        .fw-tab-content { display: none; }
+        .fw-tab-content.active { display: block; }
     </style>
 </head>
 <body>
@@ -278,24 +297,32 @@
                 <span class="version-label">Current Version</span>
                 <span class="version-value" id="fw-current-version">Loading...</span>
             </div>
-            <div class="version-row">
-                <span class="version-label">Latest Version</span>
-                <span class="version-value" id="fw-latest-version">-</span>
+
+            <div class="fw-tabs">
+                <div class="fw-tab active" id="tab-cloud" onclick="switchFwTab('cloud')">☁️ Cloud</div>
+                <div class="fw-tab" id="tab-file" onclick="switchFwTab('file')">📁 Local File</div>
             </div>
-            <div class="update-status current" id="update-status">Click "Check for Updates" to see if a new version is available</div>
+
+            <div class="fw-tab-content active" id="tab-content-cloud">
+                <div class="version-row">
+                    <span class="version-label">Latest Version</span>
+                    <span class="version-value" id="fw-latest-version">-</span>
+                </div>
+                <div class="update-status current" id="cloud-status">Click "Check for Updates" to check for a new version</div>
+                <button class="btn btn-secondary" id="check-btn" onclick="checkForUpdates()" style="width: 100%;">🔍 Check for Updates</button>
+            </div>
+
+            <div class="fw-tab-content" id="tab-content-file">
+                <input type="file" id="firmware-file" class="file-input" accept=".bin" onchange="handleFileSelect(this)">
+                <label for="firmware-file" class="file-input-label" id="file-label">📁 Select firmware file (.bin)</label>
+                <div class="form-hint" style="margin-top: 8px;">For downgrades or custom builds</div>
+            </div>
+
             <div class="progress-bar" id="progress-bar">
                 <div class="progress-fill" id="progress-fill" style="width: 0%">0%</div>
             </div>
-            <div class="btn-row">
-                <button class="btn btn-primary" id="check-btn" onclick="checkForUpdates()">🔍 Check for Updates</button>
-                <button class="btn btn-primary" id="install-btn" onclick="installUpdate()" disabled>⬇️ Install Update</button>
-            </div>
-            <div class="file-input-wrapper">
-                <div class="form-hint" style="margin-bottom: 10px;">Or upload firmware manually (for downgrades or custom builds):</div>
-                <input type="file" id="firmware-file" class="file-input" accept=".bin" onchange="handleFileSelect(this)">
-                <label for="firmware-file" class="file-input-label" id="file-label">📁 Select firmware file (.bin)</label>
-                <button class="btn btn-secondary" id="upload-btn" onclick="uploadFirmware()" disabled style="width: 100%; margin-top: 10px;">📤 Upload Firmware</button>
-            </div>
+            <div id="update-status" class="update-status" style="display:none;"></div>
+            <button class="btn btn-primary" id="install-btn" onclick="doInstall()" disabled style="width: 100%; margin-top: 15px;">⬇️ Install Update</button>
         </div>
 
         <div class="config-section">
@@ -436,353 +463,326 @@
             }
         }
 
+        /* === Firmware Update Tab Logic === */
+        let activeTab = 'cloud';
+
+        function switchFwTab(tab) {
+            if (isUpdating) return;
+            activeTab = tab;
+            document.getElementById('tab-cloud').className = 'fw-tab' + (tab === 'cloud' ? ' active' : '');
+            document.getElementById('tab-file').className = 'fw-tab' + (tab === 'file' ? ' active' : '');
+            document.getElementById('tab-content-cloud').className = 'fw-tab-content' + (tab === 'cloud' ? ' active' : '');
+            document.getElementById('tab-content-file').className = 'fw-tab-content' + (tab === 'file' ? ' active' : '');
+            updateInstallButton();
+        }
+
+        function updateInstallButton() {
+            const btn = document.getElementById('install-btn');
+            if (isUpdating) return;
+            if (activeTab === 'cloud') {
+                btn.disabled = !updateAvailable;
+                btn.textContent = '⬇️ Install Update';
+            } else {
+                btn.disabled = !selectedFile;
+                btn.textContent = '📤 Upload & Install';
+            }
+        }
+
+        function showStatus(msg, type) {
+            const el = document.getElementById('update-status');
+            el.textContent = msg;
+            el.style.display = 'block';
+            el.className = 'update-status' + (type ? ' ' + type : '');
+        }
+
+        function hideStatus() {
+            document.getElementById('update-status').style.display = 'none';
+        }
+
         async function checkForUpdates() {
             const checkBtn = document.getElementById('check-btn');
-            const installBtn = document.getElementById('install-btn');
             const latestVersion = document.getElementById('fw-latest-version');
-            const updateStatus = document.getElementById('update-status');
-            
+
             checkBtn.disabled = true;
             checkBtn.textContent = '🔄 Checking...';
             latestVersion.textContent = '...';
-            updateStatus.textContent = 'Checking for updates...';
-            updateStatus.className = 'update-status checking';
-            
+            showStatus('Checking for updates...', 'checking');
+
             try {
-                /* Start async check */
                 const response = await fetch('/api/ota/check', { method: 'POST' });
                 const startResult = await response.json();
-                
+
                 if (startResult.checking) {
-                    /* Poll for result */
-                    pollForStatus(latestVersion, updateStatus, installBtn, checkBtn);
+                    pollForStatus(latestVersion, checkBtn);
                 } else if (startResult.error) {
                     throw new Error(startResult.message || 'Failed to start check');
                 }
             } catch (err) {
                 latestVersion.textContent = 'Error';
-                updateStatus.textContent = '✗ ' + (err.message || 'Failed to check for updates');
-                updateStatus.className = 'update-status';
+                showStatus('✗ ' + (err.message || 'Failed to check for updates'));
                 checkBtn.disabled = false;
                 checkBtn.textContent = '🔍 Check for Updates';
             }
         }
 
-        function pollForStatus(latestVersion, updateStatus, installBtn, checkBtn) {
+        function pollForStatus(latestVersion, checkBtn) {
             let attempts = 0;
             const maxAttempts = 30;
-            
+
             const pollInterval = setInterval(async () => {
                 attempts++;
                 try {
                     const resp = await fetch('/api/ota/status', {cache: 'no-store'});
                     const status = await resp.json();
-                    
+
                     if (!status.checking) {
                         clearInterval(pollInterval);
-                        
+
                         if (status.result === 1) {
-                            /* Success */
                             latestVersion.textContent = status.latest_version || 'Unknown';
                             document.getElementById('fw-current-version').textContent = status.current_version;
-                            
+
                             if (status.update_available) {
                                 updateAvailable = true;
-                                updateStatus.textContent = '✓ Update available! Click "Install Update" to upgrade.';
-                                updateStatus.className = 'update-status available';
-                                installBtn.disabled = false;
+                                showStatus('✓ Update available: ' + status.latest_version, 'available');
                             } else {
                                 updateAvailable = false;
-                                updateStatus.textContent = '✓ You are running the latest version';
-                                updateStatus.className = 'update-status current';
-                                installBtn.disabled = true;
+                                showStatus('✓ You are running the latest version', 'current');
                             }
                         } else {
-                            /* Failed */
                             latestVersion.textContent = 'Error';
-                            updateStatus.textContent = '✗ Failed to check for updates (check logs)';
-                            updateStatus.className = 'update-status';
+                            showStatus('✗ Failed to check for updates (check logs)');
                         }
                         checkBtn.disabled = false;
                         checkBtn.textContent = '🔍 Check for Updates';
+                        updateInstallButton();
                         return;
                     }
-                    
-                    updateStatus.textContent = 'Checking for updates... (' + attempts + 's)';
-                } catch (e) {
-                    /* Ignore fetch errors during polling */
-                }
-                
+
+                    showStatus('Checking for updates... (' + attempts + 's)', 'checking');
+                } catch (e) { /* Ignore fetch errors during polling */ }
+
                 if (attempts >= maxAttempts) {
                     clearInterval(pollInterval);
                     latestVersion.textContent = 'Timeout';
-                    updateStatus.textContent = '✗ Check timed out. Please try again.';
-                    updateStatus.className = 'update-status';
+                    showStatus('✗ Check timed out. Please try again.');
                     checkBtn.disabled = false;
                     checkBtn.textContent = '🔍 Check for Updates';
                 }
             }, 1000);
         }
 
-        async function installUpdate() {
-            if (!updateAvailable || isUpdating) return;
-            
-            isUpdating = true;
-            const checkBtn = document.getElementById('check-btn');
-            const installBtn = document.getElementById('install-btn');
-            const progressBar = document.getElementById('progress-bar');
-            const progressFill = document.getElementById('progress-fill');
-            const updateStatus = document.getElementById('update-status');
-            
-            checkBtn.disabled = true;
-            installBtn.disabled = true;
-            installBtn.textContent = '⏳ Installing...';
-            progressBar.classList.add('show');
-            updateStatus.textContent = 'Starting update...';
-            updateStatus.className = 'update-status checking';
-            
-            try {
-                const response = await fetch('/api/ota/update', { method: 'POST' });
-                const result = await response.json();
-                
-                if (result.started) {
-                    simulateProgress(progressFill, updateStatus, 'Downloading firmware...');
-                } else {
-                    updateStatus.textContent = '✗ ' + (result.message || 'Failed to start update');
-                    updateStatus.className = 'update-status';
-                    resetUpdateButtons();
-                }
-            } catch (err) {
-                updateStatus.textContent = '✗ Error starting update';
-                updateStatus.className = 'update-status';
-                resetUpdateButtons();
-            }
-        }
-
         function handleFileSelect(input) {
             const fileLabel = document.getElementById('file-label');
-            const uploadBtn = document.getElementById('upload-btn');
-            
             if (input.files && input.files[0]) {
                 selectedFile = input.files[0];
                 fileLabel.textContent = '📄 ' + selectedFile.name + ' (' + (selectedFile.size / 1024).toFixed(1) + ' KB)';
                 fileLabel.classList.add('has-file');
-                uploadBtn.disabled = false;
             } else {
                 selectedFile = null;
                 fileLabel.textContent = '📁 Select firmware file (.bin)';
                 fileLabel.classList.remove('has-file');
-                uploadBtn.disabled = true;
+            }
+            updateInstallButton();
+        }
+
+        function doInstall() {
+            if (isUpdating) return;
+            if (activeTab === 'cloud') {
+                installFromCloud();
+            } else {
+                installFromFile();
             }
         }
 
-        async function uploadFirmware() {
-            if (!selectedFile || isUpdating) return;
-            
+        async function installFromCloud() {
+            if (!updateAvailable) return;
             isUpdating = true;
-            const uploadBtn = document.getElementById('upload-btn');
-            const checkBtn = document.getElementById('check-btn');
             const installBtn = document.getElementById('install-btn');
+            const checkBtn = document.getElementById('check-btn');
             const progressBar = document.getElementById('progress-bar');
             const progressFill = document.getElementById('progress-fill');
-            const updateStatus = document.getElementById('update-status');
-            
-            uploadBtn.disabled = true;
-            checkBtn.disabled = true;
+
             installBtn.disabled = true;
-            uploadBtn.textContent = '⏳ Uploading...';
+            installBtn.textContent = '⏳ Installing...';
+            checkBtn.disabled = true;
             progressBar.classList.add('show');
             progressFill.style.width = '0%';
             progressFill.textContent = '0%';
-            updateStatus.textContent = 'Uploading firmware...';
-            updateStatus.className = 'update-status checking';
-            
+            showStatus('Starting update...', 'checking');
+
+            try {
+                const response = await fetch('/api/ota/update', { method: 'POST' });
+                const result = await response.json();
+
+                if (result.started) {
+                    waitForReboot(0, false);
+                } else {
+                    showStatus('✗ ' + (result.message || 'Failed to start update'));
+                    resetUpdateButtons();
+                }
+            } catch (err) {
+                showStatus('✗ Error starting update');
+                resetUpdateButtons();
+            }
+        }
+
+        async function installFromFile() {
+            if (!selectedFile) return;
+            isUpdating = true;
+            const installBtn = document.getElementById('install-btn');
+            const checkBtn = document.getElementById('check-btn');
+            const progressBar = document.getElementById('progress-bar');
+            const progressFill = document.getElementById('progress-fill');
+
+            installBtn.disabled = true;
+            installBtn.textContent = '⏳ Uploading...';
+            checkBtn.disabled = true;
+            progressBar.classList.add('show');
+            progressFill.style.width = '0%';
+            progressFill.textContent = '0%';
+            showStatus('Uploading firmware...', 'checking');
+
             try {
                 const xhr = new XMLHttpRequest();
                 xhr.open('POST', '/api/ota/upload', true);
                 xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-                
+
                 xhr.upload.onprogress = function(e) {
                     if (e.lengthComputable) {
                         const percent = Math.round((e.loaded / e.total) * 95);
                         progressFill.style.width = percent + '%';
                         progressFill.textContent = percent + '%';
-                        updateStatus.textContent = 'Uploading... ' + Math.round(e.loaded / 1024) + ' KB';
+                        showStatus('Uploading... ' + Math.round(e.loaded / 1024) + ' KB', 'checking');
                     }
                 };
-                
+
                 xhr.onload = function() {
                     if (xhr.status === 200) {
                         let result;
                         try { result = JSON.parse(xhr.responseText); } catch(e) { result = {}; }
                         if (result.success) {
-                            /* Manual upload reboots immediately - skip OTA status polling */
-                            simulateProgress(progressFill, updateStatus, 'Firmware uploaded, restarting...', 95, true);
+                            showStatus('Firmware uploaded, restarting...', 'checking');
+                            progressFill.style.width = '95%';
+                            progressFill.textContent = '95%';
+                            waitForReboot(95, true);
                         } else {
-                            updateStatus.textContent = '✗ ' + (result.message || 'Upload failed');
-                            updateStatus.className = 'update-status';
+                            showStatus('✗ ' + (result.message || 'Upload failed'));
                             resetUpdateButtons();
                         }
                     } else {
                         let msg = 'Upload failed';
                         try { msg = JSON.parse(xhr.responseText).message || msg; } catch(e) {}
-                        updateStatus.textContent = '✗ ' + msg;
-                        updateStatus.className = 'update-status';
+                        showStatus('✗ ' + msg);
                         resetUpdateButtons();
                     }
                 };
-                
+
                 xhr.onerror = function() {
-                    updateStatus.textContent = '✗ Upload failed - network error';
-                    updateStatus.className = 'update-status';
+                    showStatus('✗ Upload failed - network error');
                     resetUpdateButtons();
                 };
-                
-                /* Send raw binary data instead of FormData */
+
                 xhr.send(selectedFile);
             } catch (err) {
-                updateStatus.textContent = '✗ Error uploading firmware: ' + err.message;
-                updateStatus.className = 'update-status';
+                showStatus('✗ Error uploading firmware: ' + err.message);
                 resetUpdateButtons();
             }
         }
 
-        function simulateProgress(progressFill, updateStatus, initialMsg, startPercent = 0, skipOtaStatus = false) {
-            updateStatus.textContent = initialMsg;
-            progressFill.style.width = startPercent + '%';
-            progressFill.textContent = startPercent + '%';
-            
-            /* Start waiting for reboot immediately - waitForReboot() handles detecting 
-               when the device actually goes offline (after OTA download completes) */
-            waitForReboot(startPercent, skipOtaStatus);
-        }
-
-        async function waitForReboot(startPercent = 0, skipOtaStatus = false) {
-            const updateStatus = document.getElementById('update-status');
+        async function waitForReboot(startPercent, skipOtaStatus) {
             const progressFill = document.getElementById('progress-fill');
-            const maxOfflineAttempts = 90; /* Wait up to 3 minutes for device to go offline (OTA download can be slow) */
-            const maxOnlineAttempts = 60;  /* Wait up to 2 minutes for device to come back */
-            
-            /* Phase 1: Wait for device to go OFFLINE (confirms reboot started)
-               For manual uploads (skipOtaStatus=true), device reboots immediately after response.
-               For GitHub OTA, poll /api/ota/status to track download progress.
-               
-               update_state values from backend:
-                 0 = idle (not started yet)
-                 1 = downloading/flashing
-                 2 = complete (about to reboot)
-                -1 = failed
-            */
+            const maxOfflineAttempts = 90;
+            const maxOnlineAttempts = 60;
+
             let offlineAttempts = 0;
             let deviceWentOffline = false;
-            
+
             while (offlineAttempts < maxOfflineAttempts && !deviceWentOffline) {
                 offlineAttempts++;
-                
                 try {
-                    /* For manual upload, just check if device is reachable (it reboots immediately) */
                     const endpoint = skipOtaStatus ? '/api/status' : '/api/ota/status';
-                    const response = await fetch(endpoint, { 
-                        method: 'GET', 
+                    const response = await fetch(endpoint, {
+                        method: 'GET',
                         signal: AbortSignal.timeout(2000),
                         cache: 'no-store'
                     });
                     if (!response.ok) {
                         deviceWentOffline = true;
                     } else if (!skipOtaStatus) {
-                        /* GitHub OTA: track download progress */
                         const status = await response.json();
                         const state = status.update_state;
                         const downloadPct = status.download_progress || 0;
-                        
+
                         if (state === 2) {
-                            /* Complete - about to reboot */
                             progressFill.style.width = '95%';
                             progressFill.textContent = '95%';
-                            updateStatus.textContent = 'Firmware verified, rebooting...';
+                            showStatus('Firmware verified, rebooting...', 'checking');
                         } else if (state === -1) {
-                            /* Failed */
-                            updateStatus.textContent = 'Update failed! Check device logs.';
-                            updateStatus.className = 'update-status';
+                            showStatus('Update failed! Check device logs.');
                             resetUpdateButtons();
                             return;
                         } else if (state === 1) {
-                            /* Downloading - show progress (0-95%) */
                             const visualProgress = startPercent + ((95 - startPercent) * downloadPct / 100);
                             progressFill.style.width = visualProgress + '%';
                             progressFill.textContent = Math.round(visualProgress) + '%';
-                            
+
                             const receivedKB = Math.round(status.download_received / 1024);
                             const totalKB = Math.round(status.download_total / 1024);
                             if (downloadPct > 0 && totalKB > 0) {
-                                updateStatus.textContent = 'Downloading firmware... ' + receivedKB + ' / ' + totalKB + ' KB (' + downloadPct + '%)';
+                                showStatus('Downloading firmware... ' + receivedKB + ' / ' + totalKB + ' KB (' + downloadPct + '%)', 'checking');
                             } else if (downloadPct > 0) {
-                                updateStatus.textContent = 'Downloading firmware... ' + downloadPct + '%';
+                                showStatus('Downloading firmware... ' + downloadPct + '%', 'checking');
                             } else {
-                                updateStatus.textContent = 'Connecting to GitHub...';
+                                showStatus('Connecting to update server...', 'checking');
                             }
                         } else {
-                            /* Idle (state=0) - waiting to start */
-                            updateStatus.textContent = 'Starting update...';
+                            showStatus('Starting update...', 'checking');
                         }
                     }
-                    /* Manual upload: device still responding, keep waiting for it to reboot */
                 } catch (e) {
-                    /* Network error = device is offline */
                     deviceWentOffline = true;
                 }
-                
+
                 if (!deviceWentOffline) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             }
-            
+
             if (!deviceWentOffline) {
-                updateStatus.textContent = 'Update may have failed - device never restarted. Please check manually.';
-                updateStatus.className = 'update-status';
+                showStatus('Update may have failed - device never restarted. Please check manually.');
                 resetUpdateButtons();
                 return;
             }
-            
-            /* Device went offline - show 95% */
+
             progressFill.style.width = '95%';
             progressFill.textContent = '95%';
-            updateStatus.textContent = 'Device restarting...';
-            
-            /* Phase 2: Wait for device to come back ONLINE
-               Progress: 95% -> 100% */
+            showStatus('Device restarting...', 'checking');
+
             let onlineAttempts = 0;
-            
             const checkInterval = setInterval(async () => {
                 onlineAttempts++;
-                
-                /* Update progress bar: scale from 95% to 99% */
                 const phase2Progress = 95 + (4 * onlineAttempts / maxOnlineAttempts);
                 progressFill.style.width = phase2Progress + '%';
                 progressFill.textContent = Math.round(phase2Progress) + '%';
-                
+
                 try {
-                    const response = await fetch('/api/status', { 
-                        method: 'GET', 
+                    const response = await fetch('/api/status', {
+                        method: 'GET',
                         signal: AbortSignal.timeout(2000),
                         cache: 'no-store'
                     });
-                    /* Any response (even 401 Unauthorized) means device is back online.
-                       Session will be invalid after reboot, so we just need to detect
-                       that the device is responding, then redirect to trigger re-auth. */
                     clearInterval(checkInterval);
                     progressFill.style.width = '100%';
                     progressFill.textContent = '100%';
-                    updateStatus.textContent = '✓ Update complete! Refreshing...';
-                    updateStatus.className = 'update-status available';
-                    /* Force hard reload bypassing cache - will redirect to login if needed */
+                    showStatus('✓ Update complete! Refreshing...', 'available');
                     setTimeout(() => location.href = location.href.split('?')[0] + '?t=' + Date.now(), 1000);
                     return;
                 } catch (e) { /* Device still rebooting */ }
-                updateStatus.textContent = 'Waiting for device to restart...';
+                showStatus('Waiting for device to restart...', 'checking');
                 if (onlineAttempts >= maxOnlineAttempts) {
                     clearInterval(checkInterval);
-                    updateStatus.textContent = 'Device may have restarted. Please refresh manually.';
+                    showStatus('Device may have restarted. Please refresh manually.');
                     resetUpdateButtons();
                 }
             }, 2000);
@@ -792,11 +792,9 @@
             isUpdating = false;
             document.getElementById('check-btn').disabled = false;
             document.getElementById('check-btn').textContent = '🔍 Check for Updates';
-            document.getElementById('install-btn').disabled = !updateAvailable;
-            document.getElementById('install-btn').textContent = '⬇️ Install Update';
-            document.getElementById('upload-btn').disabled = !selectedFile;
-            document.getElementById('upload-btn').textContent = '📤 Upload Firmware';
             document.getElementById('progress-bar').classList.remove('show');
+            hideStatus();
+            updateInstallButton();
         }
 
         async function scanWifi() {
