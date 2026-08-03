@@ -10,6 +10,7 @@
 #include "nvs_storage.h"
 #include "ethernet_manager.h"
 #include "wifi_manager.h"
+#include "ota_updater.h"
 #include "esp_log.h"
 #include "cJSON.h"
 #include <string.h>
@@ -43,6 +44,22 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 #if CONFIG_HA_DISCOVERY_ENABLED
         mqtt_ha_publish_discovery_all();
 #endif
+
+#if CONFIG_OTA_ENABLED
+        /* Subscribe to the HA firmware "update" Install command and publish an
+         * initial state so the entity shows the running version immediately. */
+        {
+            char cmd_topic[128];
+            snprintf(cmd_topic, sizeof(cmd_topic), "%s/update/install", CONFIG_MQTT_BASE_TOPIC);
+            esp_mqtt_client_subscribe(s_mqtt_client, cmd_topic, 1);
+
+            char latest[32] = {0};
+            if (ota_is_update_available()) {
+                ota_get_latest_version(latest, sizeof(latest));
+            }
+            mqtt_ha_publish_update_state(APP_VERSION, latest, NULL, -1);
+        }
+#endif
         break;
         
     case MQTT_EVENT_DISCONNECTED:
@@ -60,6 +77,25 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     case MQTT_EVENT_DATA:
         ESP_LOGD(TAG, "MQTT Data received on topic %.*s", 
                  event->topic_len, event->topic);
+#if CONFIG_OTA_ENABLED
+        {
+            char cmd_topic[128];
+            int cmd_len = snprintf(cmd_topic, sizeof(cmd_topic),
+                                   "%s/update/install", CONFIG_MQTT_BASE_TOPIC);
+            if (event->topic_len == cmd_len &&
+                strncmp(event->topic, cmd_topic, cmd_len) == 0 &&
+                event->data_len == 7 &&
+                strncmp(event->data, "install", 7) == 0) {
+                if (ota_is_update_available()) {
+                    ESP_LOGI(TAG, "HA requested firmware install");
+                    ota_start_update();
+                } else {
+                    ESP_LOGW(TAG, "Install requested but no update available; re-checking");
+                    ota_check_for_update_async();
+                }
+            }
+        }
+#endif
         break;
         
     default:
@@ -272,6 +308,11 @@ esp_err_t mqtt_ha_publish_discovery_all(void)
     /* Register diagnostic entities */
     mqtt_ha_register_diagnostic_entities();
     
+#if CONFIG_OTA_ENABLED
+    /* Register the firmware update entity */
+    mqtt_ha_register_update_entity();
+#endif
+    
     ESP_LOGD(TAG, "Published discovery for %d sensors + diagnostics", count);
     return ESP_OK;
 #else
@@ -295,6 +336,119 @@ static cJSON* create_device_info(void)
     cJSON_AddItemToObject(device, "identifiers", identifiers);
     
     return device;
+}
+
+esp_err_t mqtt_ha_register_update_entity(void)
+{
+#if CONFIG_OTA_ENABLED && CONFIG_HA_DISCOVERY_ENABLED
+    if (!s_connected || s_mqtt_client == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char discovery_topic[256];
+    snprintf(discovery_topic, sizeof(discovery_topic),
+             "%s/update/%s_firmware/config",
+             CONFIG_HA_DISCOVERY_PREFIX, CONFIG_MQTT_BASE_TOPIC);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "name", "Firmware");
+
+    char unique_id[64];
+    snprintf(unique_id, sizeof(unique_id), "%s_firmware", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "unique_id", unique_id);
+    cJSON_AddStringToObject(root, "object_id", unique_id);
+
+    char state_topic[128];
+    snprintf(state_topic, sizeof(state_topic), "%s/update/state", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "state_topic", state_topic);
+
+    char command_topic[128];
+    snprintf(command_topic, sizeof(command_topic), "%s/update/install", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "command_topic", command_topic);
+
+    cJSON_AddStringToObject(root, "payload_install", "install");
+    cJSON_AddStringToObject(root, "device_class", "firmware");
+
+    /* The state_topic carries JSON with installed_version/latest_version/
+     * update_percentage/in_progress keys, which HA's update platform parses
+     * natively — no value templates needed. */
+    char availability_topic[128];
+    snprintf(availability_topic, sizeof(availability_topic), "%s/status", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "availability_topic", availability_topic);
+    cJSON_AddStringToObject(root, "payload_available", "online");
+    cJSON_AddStringToObject(root, "payload_not_available", "offline");
+
+    cJSON_AddItemToObject(root, "device", create_device_info());
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    if (payload == NULL) {
+        ESP_LOGE(TAG, "Failed to create update discovery payload");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int msg_id = esp_mqtt_client_publish(s_mqtt_client, discovery_topic, payload, 0, 1, 1);
+    free(payload);
+
+    if (msg_id < 0) {
+        ESP_LOGE(TAG, "Failed to publish update entity discovery");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGD(TAG, "Registered firmware update entity with HA");
+    return ESP_OK;
+#else
+    return ESP_OK;
+#endif
+}
+
+esp_err_t mqtt_ha_publish_update_state(const char *installed_version,
+                                       const char *latest_version,
+                                       const char *release_url,
+                                       int update_percentage)
+{
+    if (!s_connected || s_mqtt_client == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Normalize away a leading "v"/"V" so HA compares "2.7.1" against "2.7.1"
+     * (GitHub tags are like "v2.7.1" while APP_VERSION is "2.7.1"); otherwise
+     * HA would report an update permanently. */
+    const char *installed = (installed_version && installed_version[0]) ? installed_version : "unknown";
+    if (installed[0] == 'v' || installed[0] == 'V') installed++;
+
+    const char *latest = (latest_version && latest_version[0]) ? latest_version : installed;
+    if (latest[0] == 'v' || latest[0] == 'V') latest++;
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "installed_version", installed);
+    /* Until a check completes, report latest == installed so HA shows "up to date". */
+    cJSON_AddStringToObject(root, "latest_version", latest);
+    if (release_url && release_url[0]) {
+        cJSON_AddStringToObject(root, "release_url", release_url);
+    }
+    /* A number drives HA's progress bar; null clears the in-progress state
+     * (per the MQTT update integration schema). */
+    if (update_percentage >= 0) {
+        cJSON_AddNumberToObject(root, "update_percentage", update_percentage);
+        cJSON_AddBoolToObject(root, "in_progress", true);
+    } else {
+        cJSON_AddNullToObject(root, "update_percentage");
+    }
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (payload == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    char state_topic[128];
+    snprintf(state_topic, sizeof(state_topic), "%s/update/state", CONFIG_MQTT_BASE_TOPIC);
+    int msg_id = esp_mqtt_client_publish(s_mqtt_client, state_topic, payload, 0, 1, 1);
+    free(payload);
+
+    return msg_id < 0 ? ESP_FAIL : ESP_OK;
 }
 
 esp_err_t mqtt_ha_register_diagnostic_entities(void)

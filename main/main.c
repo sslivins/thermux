@@ -36,7 +36,7 @@ EventGroupHandle_t network_event_group;
 const int NETWORK_CONNECTED_BIT = BIT0;
 
 /* Application version - update for each release */
-const char *APP_VERSION = "2.7.1";
+const char *APP_VERSION = "2.8.0";
 
 /* Runtime sensor settings (can be changed via web UI) */
 static uint32_t s_read_interval_ms = CONFIG_SENSOR_READ_INTERVAL_MS;
@@ -162,6 +162,61 @@ static void ota_check_task(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(CONFIG_OTA_CHECK_INTERVAL_HOURS * 3600 * 1000));
     }
 }
+
+#if CONFIG_OTA_ENABLED
+/**
+ * @brief Mirror OTA state to the Home Assistant "update" entity
+ *
+ * Publishes installed/latest version and live download progress to MQTT
+ * whenever it changes, so HA's update card shows availability and a progress
+ * bar. Polls fast while an install is running, slow otherwise.
+ */
+static void ota_status_publish_task(void *pvParameters)
+{
+    char last_latest[32] = {0};
+    int last_pct = -2;            /* sentinel: force the first publish */
+    bool last_connected = false;
+
+    while (1) {
+        bool connected = mqtt_ha_is_connected();
+
+        if (connected) {
+            char latest[32] = {0};
+            if (ota_is_update_available()) {
+                ota_get_latest_version(latest, sizeof(latest));
+            } else {
+                strncpy(latest, APP_VERSION, sizeof(latest) - 1);
+            }
+
+            int st = ota_get_update_state();   /* 0 idle, 1 downloading, 2 complete, -1 failed */
+            int pct = (st == 1) ? ota_get_download_progress() : -1;
+
+            bool reconnected = connected && !last_connected;
+            if (reconnected || pct != last_pct ||
+                strncmp(latest, last_latest, sizeof(latest)) != 0) {
+
+                const char *release_url = NULL;
+                char url_buf[128];
+                if (ota_is_update_available()) {
+                    snprintf(url_buf, sizeof(url_buf),
+                             "https://github.com/%s/%s/releases/latest",
+                             CONFIG_GITHUB_OWNER, CONFIG_GITHUB_REPO);
+                    release_url = url_buf;
+                }
+
+                mqtt_ha_publish_update_state(APP_VERSION, latest, release_url, pct);
+
+                strncpy(last_latest, latest, sizeof(last_latest) - 1);
+                last_latest[sizeof(last_latest) - 1] = '\0';
+                last_pct = pct;
+            }
+        }
+        last_connected = connected;
+
+        vTaskDelay(pdMS_TO_TICKS(ota_update_in_progress() ? 1000 : 5000));
+    }
+}
+#endif
 
 /**
  * @brief Watchdog task to monitor system health
@@ -312,6 +367,7 @@ void app_main(void)
     
 #if CONFIG_OTA_ENABLED
     xTaskCreate(ota_check_task, "ota_task", 8192, NULL, 2, NULL);
+    xTaskCreate(ota_status_publish_task, "ota_status_task", 4096, NULL, 2, NULL);
 #endif
 
     ESP_LOGI(TAG, "Application started successfully!");

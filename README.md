@@ -10,7 +10,7 @@ A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assi
 - **Web Interface** - Configuration and monitoring via built-in web server
 - **Sensor Identification** - Change detection highlighting helps identify which physical sensor is which
 - **Custom Sensor Names** - Assign friendly names to sensors via web UI (persisted in NVS)
-- **OTA Updates** - Over-the-air firmware updates from GitHub releases or manual upload with progress display
+- **OTA Updates** - Over-the-air firmware updates from GitHub releases or manual upload with progress display, including a native Home Assistant firmware **update entity** with an Install button and progress bar
 - **Ethernet & WiFi** - Primary Ethernet with WiFi fallback
 - **mDNS** - Access via `thermux.local` (auto-increments on collision: thermux-2.local, etc.)
 - **Service Discovery** - Discoverable via `_thermux._tcp` and `_http._tcp` services
@@ -110,6 +110,20 @@ View it interactively: [Swagger Editor](https://editor.swagger.io/?url=https://r
 
 The device automatically registers sensors with Home Assistant via MQTT discovery. Each sensor appears as a temperature entity. Diagnostic entities for network status and bus error rates are also published.
 
+### Firmware Update Entity
+
+Thermux publishes a native Home Assistant **`update` entity** (device class `firmware`) via MQTT discovery. It shows the installed version, the latest available GitHub release, a link to the release notes, and an **Install** button that triggers the OTA download **with a live progress bar** — the same experience as updating any other HA device, no automation or REST command needed.
+
+The entity is backed by these MQTT topics (base topic configurable, default `thermux`):
+
+| Topic | Direction | Purpose |
+|-------|-----------|---------|
+| `homeassistant/update/thermux_firmware/config` | retained | Discovery config |
+| `thermux/update/state` | device → HA (retained) | JSON: `installed_version`, `latest_version`, `release_url`, `update_percentage`, `in_progress` |
+| `thermux/update/install` | HA → device | Payload `install` starts the OTA |
+
+The device checks GitHub for new releases periodically (see `OTA_CHECK_INTERVAL_HOURS`) and updates the entity whenever availability or download progress changes.
+
 ### Manual REST Integration (Optional)
 
 You can also poll sensors directly:
@@ -126,19 +140,9 @@ rest:
         device_class: temperature
 ```
 
-### Trigger OTA Update from Home Assistant
-
-```yaml
-# configuration.yaml
-rest_command:
-  update_thermux:
-    url: "http://thermux.local/api/ota/update"
-    method: POST
-```
-
 ## OTA Updates
 
-Once Thermux is running, you can update through the web interface without manually downloading files.
+Thermux can update three ways: the native Home Assistant **update entity** (above), the built-in **web interface**, or a **manual `.bin` upload**.
 
 ### Automatic Updates (Recommended)
 
