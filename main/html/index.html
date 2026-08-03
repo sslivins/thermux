@@ -98,6 +98,28 @@
         }
         .change-indicator.warming { color: #ef4444; }
         .change-indicator.cooling { color: #3b82f6; }
+        .filter-controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+        .search-input {
+            width: 100%;
+            max-width: 400px;
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            font-size: 0.95em;
+        }
+        .search-input:focus {
+            outline: none;
+            border-color: #60a5fa;
+        }
+        .search-input::placeholder { color: #888; }
         .sort-controls {
             display: flex;
             justify-content: center;
@@ -217,6 +239,11 @@
                 Last Update: <span id="last-update">-</span>
             </div>
             <button class="btn btn-secondary" onclick="rescanSensors()" style="margin-left: auto;">🔄 Rescan</button>
+        </div>
+
+        <div class="filter-controls">
+            <input type="text" id="search-input" class="search-input" placeholder="🔍 Filter by name..." oninput="renderSensors()" autocomplete="off">
+            <button class="btn btn-secondary" id="clear-filter-btn" onclick="clearFilter()" style="margin-top:0;display:none;">Clear</button>
         </div>
 
         <div class="sort-controls">
@@ -341,7 +368,11 @@
             
             const sortBy = document.getElementById('sort-select').value;
             const threshold = parseFloat(document.getElementById('threshold-select').value);
-            
+
+            /* Apply local name filter (case-insensitive substring on displayed name) */
+            const filterText = (document.getElementById('search-input').value || '').trim().toLowerCase();
+            document.getElementById('clear-filter-btn').style.display = filterText ? 'inline-block' : 'none';
+
             /* Sort sensors based on selection */
             let sortedSensors = [...sensors];
             switch (sortBy) {
@@ -365,7 +396,19 @@
                     });
                     break;
             }
-            
+
+            /* Filter after sorting so the matched cards keep the chosen order */
+            if (filterText) {
+                sortedSensors = sortedSensors.filter(s =>
+                    (s.friendly_name || s.address).toLowerCase().includes(filterText));
+            }
+
+            if (sortedSensors.length === 0) {
+                const safe = filterText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                grid.innerHTML = '<div class="sensor-card">No sensors match &quot;' + safe + '&quot;.</div>';
+                return;
+            }
+
             grid.innerHTML = sortedSensors.map(sensor => {
                 const change = changeAmounts[sensor.address] || 0;
                 const absChange = Math.abs(change);
@@ -467,6 +510,13 @@
             } catch (err) {
                 showToast('Error resetting sensor stats', true);
             }
+        }
+
+        function clearFilter() {
+            const input = document.getElementById('search-input');
+            input.value = '';
+            renderSensors();
+            input.focus();
         }
 
         function showToast(message, isError = false) {
