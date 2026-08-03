@@ -66,4 +66,24 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void);
  */
 esp_err_t mqtt_ha_publish_diagnostics(void);
 
+/**
+ * @brief Register the Home Assistant firmware "update" entity (MQTT discovery)
+ *
+ * Exposes an HA `update` entity with an Install button, current/latest version
+ * and a live progress bar, backed by the ota_updater module.
+ */
+esp_err_t mqtt_ha_register_update_entity(void);
+
+/**
+ * @brief Publish the firmware update entity state
+ * @param installed_version Currently running firmware version
+ * @param latest_version Latest available version (empty/NULL => reported equal to installed)
+ * @param release_url Optional link to the release notes (empty/NULL to omit)
+ * @param update_percentage Download progress 0-100 while installing, or <0 when idle
+ */
+esp_err_t mqtt_ha_publish_update_state(const char *installed_version,
+                                       const char *latest_version,
+                                       const char *release_url,
+                                       int update_percentage);
+
 #endif /* MQTT_CLIENT_HA_H */
