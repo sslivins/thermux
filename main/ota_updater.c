@@ -26,7 +26,11 @@ extern const char *APP_VERSION;
 
 /* GitHub API URL for releases */
 #define GITHUB_API_URL "https://api.github.com/repos/%s/%s/releases/latest"
-#define GITHUB_API_BUFFER_SIZE 4096
+/* Initial response buffer; grows dynamically as data arrives. The GitHub
+ * /releases/latest payload is ~8KB and grows with asset count and release
+ * notes length, so a fixed buffer truncated the JSON and broke parsing. */
+#define GITHUB_API_INITIAL_BUFFER_SIZE 8192
+#define GITHUB_API_MAX_BUFFER_SIZE     (64 * 1024)
 
 static char s_latest_version[32] = {0};
 static char s_download_url[512] = {0};
@@ -66,24 +70,53 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 {
     static char *output_buffer = NULL;
     static int output_len = 0;
+    static int output_cap = 0;
     
     switch (evt->event_id) {
     case HTTP_EVENT_ON_DATA:
         /* Handle both chunked and non-chunked responses */
         if (output_buffer == NULL) {
-            output_buffer = (char *)malloc(GITHUB_API_BUFFER_SIZE);
+            output_cap = GITHUB_API_INITIAL_BUFFER_SIZE;
+            output_buffer = (char *)malloc(output_cap);
             output_len = 0;
             if (output_buffer == NULL) {
                 ESP_LOGE(TAG, "Failed to allocate memory for output buffer");
+                output_cap = 0;
                 return ESP_FAIL;
             }
         }
-        /* Append data if there's room */
-        if (output_len + evt->data_len < GITHUB_API_BUFFER_SIZE) {
+        /* Grow the buffer as needed (reserve 1 byte for the null terminator) */
+        if (output_len + evt->data_len + 1 > output_cap) {
+            int new_cap = output_cap;
+            while (output_len + evt->data_len + 1 > new_cap &&
+                   new_cap < GITHUB_API_MAX_BUFFER_SIZE) {
+                new_cap *= 2;
+            }
+            if (new_cap > GITHUB_API_MAX_BUFFER_SIZE) {
+                new_cap = GITHUB_API_MAX_BUFFER_SIZE;
+            }
+            if (new_cap != output_cap) {
+                char *grown = (char *)realloc(output_buffer, new_cap);
+                if (grown == NULL) {
+                    ESP_LOGE(TAG, "Failed to grow output buffer to %d bytes", new_cap);
+                    free(output_buffer);
+                    output_buffer = NULL;
+                    output_len = 0;
+                    output_cap = 0;
+                    return ESP_FAIL;
+                }
+                output_buffer = grown;
+                output_cap = new_cap;
+            }
+        }
+        /* Append data if there's room (leave space for null terminator) */
+        if (output_len + evt->data_len + 1 <= output_cap) {
             memcpy(output_buffer + output_len, evt->data, evt->data_len);
             output_len += evt->data_len;
         } else {
-            ESP_LOGW(TAG, "Response buffer full, truncating");
+            /* Only reachable if the response exceeds GITHUB_API_MAX_BUFFER_SIZE */
+            ESP_LOGW(TAG, "Response exceeds max buffer (%d bytes), truncating",
+                     GITHUB_API_MAX_BUFFER_SIZE);
         }
         break;
         
@@ -96,6 +129,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             }
             output_buffer = NULL;
             output_len = 0;
+            output_cap = 0;
         }
         break;
         
@@ -106,6 +140,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             free(output_buffer);
             output_buffer = NULL;
             output_len = 0;
+            output_cap = 0;
         }
         break;
         
