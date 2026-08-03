@@ -14,15 +14,17 @@ int nvs_generate_sensor_key(const uint8_t *address, char *key, size_t key_len)
         return -1;
     }
     
-    /* Need at least 11 chars: "s_" + 8 hex digits + null */
-    if (key_len < 11) {
+    /* Need at least 15 chars: "s_" + 12 hex digits + null */
+    if (key_len < 15) {
         return -1;
     }
     
-    /* Use last 4 bytes of address (bytes 4-7) for uniqueness */
-    /* This keeps key under 15 char NVS limit */
-    int len = snprintf(key, key_len, "s_%02x%02x%02x%02x",
-                       address[4], address[5], address[6], address[7]);
+    /* DS18B20 ROM: [0]=family (const 0x28), [1..6]=unique 48-bit serial,
+     * [7]=CRC (derived). Use the full unique serial (bytes 1-6) so two
+     * sensors never collide. "s_" + 12 hex = 14 chars, within 15-char limit. */
+    int len = snprintf(key, key_len, "s_%02x%02x%02x%02x%02x%02x",
+                       address[1], address[2], address[3],
+                       address[4], address[5], address[6]);
     
     if (len < 0 || (size_t)len >= key_len) {
         return -1;
@@ -92,8 +94,8 @@ int nvs_is_sensor_key(const char *key)
         return 0;
     }
     
-    /* Sensor keys start with "s_" and are exactly 10 chars (s_ + 8 hex) */
-    if (strlen(key) != 10) {
+    /* Sensor keys start with "s_" and are exactly 14 chars (s_ + 12 hex) */
+    if (strlen(key) != 14) {
         return 0;
     }
     
@@ -102,7 +104,7 @@ int nvs_is_sensor_key(const char *key)
     }
     
     /* Verify remaining chars are hex digits */
-    for (int i = 2; i < 10; i++) {
+    for (int i = 2; i < 14; i++) {
         if (!isxdigit((unsigned char)key[i])) {
             return 0;
         }
@@ -121,8 +123,8 @@ int nvs_parse_sensor_key(const char *key, uint8_t *partial_addr)
         return -1;
     }
     
-    /* Parse hex bytes from key (skip "s_" prefix) */
-    for (int i = 0; i < 4; i++) {
+    /* Parse hex bytes from key (skip "s_" prefix): 6 unique serial bytes */
+    for (int i = 0; i < 6; i++) {
         unsigned int byte;
         if (sscanf(key + 2 + i * 2, "%02x", &byte) != 1) {
             return -1;

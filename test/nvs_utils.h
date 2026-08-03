@@ -21,8 +21,10 @@
 /**
  * @brief Generate NVS key from sensor address
  * 
- * Uses last 4 bytes of address to create unique key within 15 char limit.
- * Format: "s_XXXXXXXX" (10 chars)
+ * Uses the full unique 48-bit serial (bytes 1-6 of the ROM) to create a
+ * collision-free key within the 15 char limit. Byte 0 (family code) and
+ * byte 7 (CRC) are excluded since they are constant/derived.
+ * Format: "s_XXXXXXXXXXXX" (14 chars)
  * 
  * @param address 8-byte sensor ROM address
  * @param key Output buffer (must be at least 16 bytes)
@@ -63,10 +65,10 @@ int nvs_is_sensor_key(const char *key);
 /**
  * @brief Parse sensor address from key
  * 
- * Extracts the partial address (last 4 bytes) from a sensor key
+ * Extracts the partial address (unique serial bytes 1-6) from a sensor key
  * 
- * @param key Sensor key string (format: "s_XXXXXXXX")
- * @param partial_addr Output buffer for 4 bytes
+ * @param key Sensor key string (format: "s_XXXXXXXXXXXX")
+ * @param partial_addr Output buffer for 6 bytes
  * @return 0 on success, -1 on error
  */
 int nvs_parse_sensor_key(const char *key, uint8_t *partial_addr);
