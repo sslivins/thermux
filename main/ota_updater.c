@@ -222,23 +222,63 @@ static esp_err_t ota_check_for_update_internal(void)
                         s_update_available = true;
                         ESP_LOGI(TAG, "Update available: %s -> %s", APP_VERSION, s_latest_version);
                         
-                        /* Find firmware binary in assets */
+                        /* Find the application firmware binary among the release
+                         * assets. Releases also ship bootloader.bin and
+                         * partition-table.bin, which must NOT be flashed as the
+                         * app: doing so corrupts the OTA slot and forces a
+                         * bootloader fallback to the factory image. Prefer the
+                         * exact app asset "<repo>.bin"; fall back to any .bin
+                         * that is not the bootloader or partition table. */
+                        s_download_url[0] = '\0';
+                        char expected_app[64];
+                        snprintf(expected_app, sizeof(expected_app), "%s.bin", CONFIG_GITHUB_REPO);
                         if (cJSON_IsArray(assets)) {
                             int asset_count = cJSON_GetArraySize(assets);
+                            const char *fallback_url = NULL;
                             for (int i = 0; i < asset_count; i++) {
                                 cJSON *asset = cJSON_GetArrayItem(assets, i);
                                 cJSON *name = cJSON_GetObjectItem(asset, "name");
                                 cJSON *browser_url = cJSON_GetObjectItem(asset, "browser_download_url");
                                 
-                                if (cJSON_IsString(name) && cJSON_IsString(browser_url)) {
-                                    /* Look for .bin file */
-                                    if (strstr(name->valuestring, ".bin") != NULL) {
-                                        strncpy(s_download_url, browser_url->valuestring, 
-                                               sizeof(s_download_url) - 1);
-                                        ESP_LOGD(TAG, "Firmware URL: %s", s_download_url);
-                                        break;
-                                    }
+                                if (!cJSON_IsString(name) || !cJSON_IsString(browser_url)) {
+                                    continue;
                                 }
+                                const char *nm = name->valuestring;
+                                
+                                /* Skip non-application binaries */
+                                if (strcmp(nm, "bootloader.bin") == 0 ||
+                                    strcmp(nm, "partition-table.bin") == 0) {
+                                    continue;
+                                }
+                                /* Only consider files ending in ".bin" */
+                                const char *dot = strrchr(nm, '.');
+                                if (dot == NULL || strcmp(dot, ".bin") != 0) {
+                                    continue;
+                                }
+                                
+                                if (strcmp(nm, expected_app) == 0) {
+                                    /* Exact match on the app binary — use it */
+                                    strncpy(s_download_url, browser_url->valuestring,
+                                            sizeof(s_download_url) - 1);
+                                    s_download_url[sizeof(s_download_url) - 1] = '\0';
+                                    ESP_LOGD(TAG, "Firmware URL: %s", s_download_url);
+                                    fallback_url = NULL;
+                                    break;
+                                }
+                                /* Remember the first plausible app .bin as a fallback */
+                                if (fallback_url == NULL) {
+                                    fallback_url = browser_url->valuestring;
+                                }
+                            }
+                            if (s_download_url[0] == '\0' && fallback_url != NULL) {
+                                strncpy(s_download_url, fallback_url, sizeof(s_download_url) - 1);
+                                s_download_url[sizeof(s_download_url) - 1] = '\0';
+                                ESP_LOGW(TAG, "App asset '%s' not found; using fallback: %s",
+                                         expected_app, s_download_url);
+                            }
+                            if (s_download_url[0] == '\0') {
+                                ESP_LOGE(TAG, "No suitable firmware .bin asset found in release");
+                                s_update_available = false;
                             }
                         }
                     } else {
@@ -381,6 +421,12 @@ esp_err_t ota_get_latest_version(char *version, size_t max_len)
  */
 static void ota_update_task(void *pvParameters)
 {
+    if (s_download_url[0] == '\0') {
+        ESP_LOGE(TAG, "OTA update aborted: no firmware download URL set");
+        s_update_state = OTA_UPDATE_FAILED;
+        vTaskDelete(NULL);
+        return;
+    }
     ESP_LOGI(TAG, "Starting OTA update from: %s", s_download_url);
     
     s_update_state = OTA_UPDATE_DOWNLOADING;
