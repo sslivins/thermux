@@ -17,7 +17,7 @@ void test_nvs_generate_sensor_key_basic(void)
     int result = nvs_generate_sensor_key(addr, key, sizeof(key));
     
     TEST_ASSERT_EQUAL_INT(0, result);
-    TEST_ASSERT_EQUAL_STRING("s_56789abc", key);  /* Uses last 4 bytes */
+    TEST_ASSERT_EQUAL_STRING("s_ff123456789a", key);  /* Unique serial bytes 1-6 */
 }
 
 void test_nvs_generate_sensor_key_zeros(void)
@@ -28,7 +28,7 @@ void test_nvs_generate_sensor_key_zeros(void)
     int result = nvs_generate_sensor_key(addr, key, sizeof(key));
     
     TEST_ASSERT_EQUAL_INT(0, result);
-    TEST_ASSERT_EQUAL_STRING("s_00000000", key);
+    TEST_ASSERT_EQUAL_STRING("s_000000000000", key);
 }
 
 void test_nvs_generate_sensor_key_max_values(void)
@@ -39,7 +39,7 @@ void test_nvs_generate_sensor_key_max_values(void)
     int result = nvs_generate_sensor_key(addr, key, sizeof(key));
     
     TEST_ASSERT_EQUAL_INT(0, result);
-    TEST_ASSERT_EQUAL_STRING("s_ffffffff", key);
+    TEST_ASSERT_EQUAL_STRING("s_ffffffffffff", key);
 }
 
 void test_nvs_generate_sensor_key_length_check(void)
@@ -47,16 +47,35 @@ void test_nvs_generate_sensor_key_length_check(void)
     uint8_t addr[] = {0x28, 0xFF, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC};
     char key[16];
     
-    /* Key is "s_56789abc" = 10 chars, within 15 char NVS limit */
+    /* Key is "s_ff123456789a" = 14 chars, within 15 char NVS limit */
     nvs_generate_sensor_key(addr, key, sizeof(key));
     
     TEST_ASSERT_TRUE(strlen(key) <= NVS_KEY_MAX_LEN);
 }
 
+/* Regression test for the friendly-name collision bug: two sensors whose
+ * ROM addresses differ ONLY in the unique serial bytes 1-3 (and share bytes
+ * 4-7) must produce DISTINCT keys. The old scheme keyed on bytes 4-7 only and
+ * collided here, causing naming one sensor to alias another. */
+void test_nvs_generate_sensor_key_no_collision(void)
+{
+    uint8_t a[] = {0x28, 0x11, 0x22, 0x33, 0x56, 0x78, 0x9A, 0xBC};
+    uint8_t b[] = {0x28, 0xAA, 0xBB, 0xCC, 0x56, 0x78, 0x9A, 0xBC};
+    char key_a[16];
+    char key_b[16];
+    
+    TEST_ASSERT_EQUAL_INT(0, nvs_generate_sensor_key(a, key_a, sizeof(key_a)));
+    TEST_ASSERT_EQUAL_INT(0, nvs_generate_sensor_key(b, key_b, sizeof(key_b)));
+    
+    TEST_ASSERT_EQUAL_STRING("s_11223356789a", key_a);
+    TEST_ASSERT_EQUAL_STRING("s_aabbcc56789a", key_b);
+    TEST_ASSERT_FALSE(strcmp(key_a, key_b) == 0);
+}
+
 void test_nvs_generate_sensor_key_buffer_too_small(void)
 {
     uint8_t addr[] = {0x28, 0xFF, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC};
-    char key[5];  /* Too small - needs at least 11 */
+    char key[5];  /* Too small - needs at least 15 */
     
     int result = nvs_generate_sensor_key(addr, key, sizeof(key));
     
@@ -109,8 +128,8 @@ void test_nvs_validate_key_null(void)
 
 void test_nvs_get_max_value_len_sensor(void)
 {
-    TEST_ASSERT_EQUAL_INT(32, nvs_get_max_value_len("s_12345678"));
-    TEST_ASSERT_EQUAL_INT(32, nvs_get_max_value_len("s_aabbccdd"));
+    TEST_ASSERT_EQUAL_INT(32, nvs_get_max_value_len("s_123456789012"));
+    TEST_ASSERT_EQUAL_INT(32, nvs_get_max_value_len("s_aabbccddeeff"));
 }
 
 void test_nvs_get_max_value_len_mqtt(void)
@@ -137,21 +156,22 @@ void test_nvs_get_max_value_len_invalid(void)
 
 void test_nvs_is_sensor_key_valid(void)
 {
-    TEST_ASSERT_TRUE(nvs_is_sensor_key("s_12345678"));
-    TEST_ASSERT_TRUE(nvs_is_sensor_key("s_aabbccdd"));
-    TEST_ASSERT_TRUE(nvs_is_sensor_key("s_00000000"));
-    TEST_ASSERT_TRUE(nvs_is_sensor_key("s_ffffffff"));
-    TEST_ASSERT_TRUE(nvs_is_sensor_key("s_AABBCCDD"));  /* Uppercase hex */
+    TEST_ASSERT_TRUE(nvs_is_sensor_key("s_123456789012"));
+    TEST_ASSERT_TRUE(nvs_is_sensor_key("s_aabbccddeeff"));
+    TEST_ASSERT_TRUE(nvs_is_sensor_key("s_000000000000"));
+    TEST_ASSERT_TRUE(nvs_is_sensor_key("s_ffffffffffff"));
+    TEST_ASSERT_TRUE(nvs_is_sensor_key("s_AABBCCDDEEFF"));  /* Uppercase hex */
 }
 
 void test_nvs_is_sensor_key_invalid(void)
 {
     TEST_ASSERT_FALSE(nvs_is_sensor_key("mqtt_uri"));
     TEST_ASSERT_FALSE(nvs_is_sensor_key("wifi_ssid"));
-    TEST_ASSERT_FALSE(nvs_is_sensor_key("s_123"));      /* Too short */
-    TEST_ASSERT_FALSE(nvs_is_sensor_key("s_123456789")); /* Too long */
-    TEST_ASSERT_FALSE(nvs_is_sensor_key("s_1234567g")); /* Non-hex char */
-    TEST_ASSERT_FALSE(nvs_is_sensor_key("x_12345678")); /* Wrong prefix */
+    TEST_ASSERT_FALSE(nvs_is_sensor_key("s_123"));            /* Too short */
+    TEST_ASSERT_FALSE(nvs_is_sensor_key("s_56789abc"));       /* Old 10-char format */
+    TEST_ASSERT_FALSE(nvs_is_sensor_key("s_1234567890123"));  /* 13 hex - wrong length */
+    TEST_ASSERT_FALSE(nvs_is_sensor_key("s_12345678901g"));   /* Non-hex char */
+    TEST_ASSERT_FALSE(nvs_is_sensor_key("x_123456789012"));   /* Wrong prefix */
 }
 
 void test_nvs_is_sensor_key_null(void)
@@ -163,42 +183,47 @@ void test_nvs_is_sensor_key_null(void)
 
 void test_nvs_parse_sensor_key_basic(void)
 {
-    uint8_t partial_addr[4];
+    uint8_t partial_addr[6];
     
-    int result = nvs_parse_sensor_key("s_56789abc", partial_addr);
+    int result = nvs_parse_sensor_key("s_ff123456789a", partial_addr);
     
     TEST_ASSERT_EQUAL_INT(0, result);
-    TEST_ASSERT_EQUAL_INT(0x56, partial_addr[0]);
-    TEST_ASSERT_EQUAL_INT(0x78, partial_addr[1]);
-    TEST_ASSERT_EQUAL_INT(0x9A, partial_addr[2]);
-    TEST_ASSERT_EQUAL_INT(0xBC, partial_addr[3]);
+    TEST_ASSERT_EQUAL_INT(0xFF, partial_addr[0]);
+    TEST_ASSERT_EQUAL_INT(0x12, partial_addr[1]);
+    TEST_ASSERT_EQUAL_INT(0x34, partial_addr[2]);
+    TEST_ASSERT_EQUAL_INT(0x56, partial_addr[3]);
+    TEST_ASSERT_EQUAL_INT(0x78, partial_addr[4]);
+    TEST_ASSERT_EQUAL_INT(0x9A, partial_addr[5]);
 }
 
 void test_nvs_parse_sensor_key_zeros(void)
 {
-    uint8_t partial_addr[4];
+    uint8_t partial_addr[6];
     
-    int result = nvs_parse_sensor_key("s_00000000", partial_addr);
+    int result = nvs_parse_sensor_key("s_000000000000", partial_addr);
     
     TEST_ASSERT_EQUAL_INT(0, result);
     TEST_ASSERT_EQUAL_INT(0x00, partial_addr[0]);
     TEST_ASSERT_EQUAL_INT(0x00, partial_addr[1]);
     TEST_ASSERT_EQUAL_INT(0x00, partial_addr[2]);
     TEST_ASSERT_EQUAL_INT(0x00, partial_addr[3]);
+    TEST_ASSERT_EQUAL_INT(0x00, partial_addr[4]);
+    TEST_ASSERT_EQUAL_INT(0x00, partial_addr[5]);
 }
 
 void test_nvs_parse_sensor_key_invalid(void)
 {
-    uint8_t partial_addr[4];
+    uint8_t partial_addr[6];
     
     TEST_ASSERT_EQUAL_INT(-1, nvs_parse_sensor_key("mqtt_uri", partial_addr));
     TEST_ASSERT_EQUAL_INT(-1, nvs_parse_sensor_key("s_123", partial_addr));
+    TEST_ASSERT_EQUAL_INT(-1, nvs_parse_sensor_key("s_56789abc", partial_addr)); /* Old format */
     TEST_ASSERT_EQUAL_INT(-1, nvs_parse_sensor_key(NULL, partial_addr));
 }
 
 void test_nvs_parse_sensor_key_null_output(void)
 {
-    TEST_ASSERT_EQUAL_INT(-1, nvs_parse_sensor_key("s_12345678", NULL));
+    TEST_ASSERT_EQUAL_INT(-1, nvs_parse_sensor_key("s_123456789012", NULL));
 }
 
 /* ===== Roundtrip Test ===== */
@@ -207,7 +232,7 @@ void test_nvs_key_roundtrip(void)
 {
     uint8_t original_addr[] = {0x28, 0xFF, 0x12, 0x34, 0xAB, 0xCD, 0xEF, 0x01};
     char key[16];
-    uint8_t recovered_partial[4];
+    uint8_t recovered_partial[6];
     
     /* Generate key from address */
     int gen_result = nvs_generate_sensor_key(original_addr, key, sizeof(key));
@@ -217,11 +242,13 @@ void test_nvs_key_roundtrip(void)
     int parse_result = nvs_parse_sensor_key(key, recovered_partial);
     TEST_ASSERT_EQUAL_INT(0, parse_result);
     
-    /* Verify last 4 bytes match */
-    TEST_ASSERT_EQUAL_INT(original_addr[4], recovered_partial[0]);
-    TEST_ASSERT_EQUAL_INT(original_addr[5], recovered_partial[1]);
-    TEST_ASSERT_EQUAL_INT(original_addr[6], recovered_partial[2]);
-    TEST_ASSERT_EQUAL_INT(original_addr[7], recovered_partial[3]);
+    /* Verify unique serial bytes (1-6) match */
+    TEST_ASSERT_EQUAL_INT(original_addr[1], recovered_partial[0]);
+    TEST_ASSERT_EQUAL_INT(original_addr[2], recovered_partial[1]);
+    TEST_ASSERT_EQUAL_INT(original_addr[3], recovered_partial[2]);
+    TEST_ASSERT_EQUAL_INT(original_addr[4], recovered_partial[3]);
+    TEST_ASSERT_EQUAL_INT(original_addr[5], recovered_partial[4]);
+    TEST_ASSERT_EQUAL_INT(original_addr[6], recovered_partial[5]);
 }
 
 /* ===== Test Runner ===== */
@@ -233,6 +260,7 @@ void run_nvs_tests(void)
     RUN_TEST(test_nvs_generate_sensor_key_zeros);
     RUN_TEST(test_nvs_generate_sensor_key_max_values);
     RUN_TEST(test_nvs_generate_sensor_key_length_check);
+    RUN_TEST(test_nvs_generate_sensor_key_no_collision);
     RUN_TEST(test_nvs_generate_sensor_key_buffer_too_small);
     RUN_TEST(test_nvs_generate_sensor_key_null_inputs);
     

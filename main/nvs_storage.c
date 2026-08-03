@@ -21,8 +21,32 @@ esp_err_t nvs_storage_init(void)
 
 /**
  * @brief Convert sensor address to NVS key string
+ *
+ * A DS18B20 8-byte ROM is [0]=family code (constant 0x28), [1..6]=unique
+ * 48-bit serial, [7]=CRC (derived from the other bytes). The key must use
+ * the full unique serial to avoid collisions between sensors: bytes [1..6].
+ * Format "s_XXXXXXXXXXXX" = 14 chars, within the 15-char NVS key limit.
+ *
+ * (Previously this used only bytes [4..7], dropping unique serial bytes
+ * [1..3] and mixing in the redundant CRC, so two sensors that shared bytes
+ * [4..7] collided to the same key -- naming one aliased the other.)
  */
 static void address_to_key(const uint8_t *address, char *key, size_t key_len)
+{
+    snprintf(key, key_len, "s_%02x%02x%02x%02x%02x%02x",
+             address[1], address[2], address[3],
+             address[4], address[5], address[6]);
+}
+
+/**
+ * @brief Legacy (pre-fix) NVS key format
+ *
+ * The original code keyed on bytes [4..7] only ("s_XXXXXXXX", 10 chars). That
+ * dropped unique serial bytes [1..3] and caused collisions. We still compute
+ * it so existing devices can migrate their saved names to the new key format
+ * on first boot (see nvs_storage_load_sensor_name).
+ */
+static void address_to_legacy_key(const uint8_t *address, char *key, size_t key_len)
 {
     snprintf(key, key_len, "s_%02x%02x%02x%02x",
              address[4], address[5], address[6], address[7]);
@@ -72,6 +96,47 @@ esp_err_t nvs_storage_load_sensor_name(const uint8_t *sensor_address, char *frie
     size_t required_size = max_len;
     err = nvs_get_str(handle, key, friendly_name, &required_size);
     nvs_close(handle);
+
+    if (err == ESP_OK) {
+        return err;
+    }
+
+    /* New key not found: attempt a one-time migration from the legacy key
+     * format (bytes 4-7). If a name was saved under the old scheme, copy it to
+     * the new key and erase the legacy entry so it doesn't linger. This runs
+     * transparently the first time each connected sensor's name is loaded after
+     * updating firmware. */
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        char legacy_key[16];
+        address_to_legacy_key(sensor_address, legacy_key, sizeof(legacy_key));
+
+        nvs_handle_t mh;
+        esp_err_t merr = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &mh);
+        if (merr != ESP_OK) {
+            return err;  /* report original not-found */
+        }
+
+        size_t legacy_size = max_len;
+        merr = nvs_get_str(mh, legacy_key, friendly_name, &legacy_size);
+        if (merr == ESP_OK) {
+            /* Re-key: write under the new key, then drop the legacy entry. */
+            esp_err_t set_err = nvs_set_str(mh, key, friendly_name);
+            if (set_err == ESP_OK) {
+                nvs_erase_key(mh, legacy_key);
+                nvs_commit(mh);
+                ESP_LOGI(TAG, "Migrated sensor name %s -> %s (%s)",
+                         legacy_key, key, friendly_name);
+                err = ESP_OK;
+            } else {
+                /* Migration write failed: keep the legacy value we read so the
+                 * name still shows this boot; retry migration next time. */
+                ESP_LOGW(TAG, "Failed to migrate sensor name %s: %s",
+                         legacy_key, esp_err_to_name(set_err));
+                err = ESP_OK;
+            }
+        }
+        nvs_close(mh);
+    }
 
     return err;
 }
