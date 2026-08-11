@@ -11,6 +11,7 @@ extern void run_address_tests(void);
 extern void run_mqtt_tests(void);
 extern void run_config_tests(void);
 extern void run_nvs_tests(void);
+extern void run_bus_stats_tests(void);
 
 int main(void)
 {
@@ -30,6 +31,9 @@ int main(void)
     
     printf("\n[NVS Utilities Tests]\n");
     run_nvs_tests();
+
+    printf("\n[Bus Statistics Tests]\n");
+    run_bus_stats_tests();
     
     UNITY_END();
     

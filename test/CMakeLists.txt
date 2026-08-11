@@ -18,8 +18,10 @@ add_executable(test_runner
     test_mqtt_utils.c
     test_config_utils.c
     test_nvs_utils.c
+    test_bus_stats.c
     # Modules under test (test-only utilities are local, version_utils is shared)
     ../main/version_utils.c
+    ../main/bus_stats.c
     mqtt_utils.c
     config_utils.c
     nvs_utils.c

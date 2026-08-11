@@ -4,6 +4,7 @@
  */
 
 #include "onewire_temp.h"
+#include "bus_stats.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
@@ -24,10 +25,39 @@ static int s_resolution = 12;
 /* Bus error statistics */
 static uint32_t s_total_reads = 0;
 static uint32_t s_failed_reads = 0;
+static bus_stats_window_t s_recent_reads = {0};
+static uint32_t s_consecutive_failed_cycles = 0;
+static int64_t s_last_successful_read_us = 0;
+static portMUX_TYPE s_stats_lock = portMUX_INITIALIZER_UNLOCKED;
 
 /* DS18B20 family code and commands */
 #define DS18B20_FAMILY_CODE     0x28
 #define DS18B20_CMD_CONVERT     0x44
+
+static void record_read_attempt(bool failed)
+{
+    portENTER_CRITICAL(&s_stats_lock);
+    s_total_reads++;
+    if (failed) {
+        s_failed_reads++;
+    }
+    bus_stats_window_record(&s_recent_reads, failed);
+    portEXIT_CRITICAL(&s_stats_lock);
+}
+
+static void record_read_cycle(bool had_successful_read)
+{
+    int64_t now_us = esp_timer_get_time();
+
+    portENTER_CRITICAL(&s_stats_lock);
+    if (had_successful_read) {
+        s_last_successful_read_us = now_us;
+        s_consecutive_failed_cycles = 0;
+    } else {
+        s_consecutive_failed_cycles++;
+    }
+    portEXIT_CRITICAL(&s_stats_lock);
+}
 
 esp_err_t onewire_temp_init(int gpio_num)
 {
@@ -176,6 +206,7 @@ esp_err_t onewire_temp_read_all(onewire_sensor_t *sensors, int sensor_count)
     esp_err_t err = onewire_bus_reset(s_bus_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Bus reset failed");
+        record_read_cycle(false);
         return err;
     }
     
@@ -184,6 +215,7 @@ esp_err_t onewire_temp_read_all(onewire_sensor_t *sensors, int sensor_count)
     err = onewire_bus_write_bytes(s_bus_handle, cmd, sizeof(cmd));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send convert command");
+        record_read_cycle(false);
         return err;
     }
     
@@ -197,19 +229,20 @@ esp_err_t onewire_temp_read_all(onewire_sensor_t *sensors, int sensor_count)
     /* Step 4: Read temperature from each sensor */
     int64_t now = esp_timer_get_time() / 1000;
     esp_err_t result = ESP_OK;
+    bool had_successful_read = false;
     
     for (int i = 0; i < sensor_count && i < s_device_count; i++) {
         if (s_ds18b20_handles[i] != NULL) {
             float temp;
-            s_total_reads++;
             sensors[i].total_reads++;
             err = ds18b20_get_temperature(s_ds18b20_handles[i], &temp);
+            record_read_attempt(err != ESP_OK);
             if (err == ESP_OK) {
                 sensors[i].temperature = temp;
                 sensors[i].valid = true;
                 sensors[i].last_read_time = now;
+                had_successful_read = true;
             } else {
-                s_failed_reads++;
                 sensors[i].failed_reads++;
                 sensors[i].valid = false;
                 result = err;
@@ -217,6 +250,8 @@ esp_err_t onewire_temp_read_all(onewire_sensor_t *sensors, int sensor_count)
             }
         }
     }
+
+    record_read_cycle(had_successful_read);
 
     int64_t elapsed_ms = (esp_timer_get_time() - start_time) / 1000;
     ESP_LOGD(TAG, "Read %d sensors in %lld ms", sensor_count, elapsed_ms);
@@ -238,14 +273,40 @@ int onewire_temp_get_resolution(void)
 
 void onewire_temp_get_error_stats(uint32_t *total_reads, uint32_t *failed_reads)
 {
+    portENTER_CRITICAL(&s_stats_lock);
     if (total_reads) *total_reads = s_total_reads;
     if (failed_reads) *failed_reads = s_failed_reads;
+    portEXIT_CRITICAL(&s_stats_lock);
+}
+
+void onewire_temp_get_bus_health(onewire_bus_health_t *health)
+{
+    if (health == NULL) {
+        return;
+    }
+
+    int64_t now_us = esp_timer_get_time();
+
+    portENTER_CRITICAL(&s_stats_lock);
+    bus_stats_window_get(&s_recent_reads,
+                         &health->recent_total_reads,
+                         &health->recent_failed_reads);
+    health->consecutive_failed_cycles = s_consecutive_failed_cycles;
+    health->has_successful_read = s_last_successful_read_us > 0;
+    health->seconds_since_last_success = health->has_successful_read
+        ? (uint64_t)((now_us - s_last_successful_read_us) / 1000000)
+        : 0;
+    portEXIT_CRITICAL(&s_stats_lock);
 }
 
 void onewire_temp_reset_error_stats(void)
 {
+    portENTER_CRITICAL(&s_stats_lock);
     s_total_reads = 0;
     s_failed_reads = 0;
+    bus_stats_window_reset(&s_recent_reads);
+    s_consecutive_failed_cycles = 0;
+    portEXIT_CRITICAL(&s_stats_lock);
     ESP_LOGI(TAG, "Error statistics reset");
 }
 

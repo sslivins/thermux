@@ -1174,8 +1174,23 @@ components:
             error_rate:
               type: number
               format: double
-              description: Error rate as a percentage (failed/total * 100)
+              description: Lifetime error rate as a percentage (failed/total * 100)
               example: 0.2
+            recent_error_rate:
+              type: number
+              format: double
+              description: Error rate across the most recent 1000 individual read attempts
+              example: 0.1
+            consecutive_failed_cycles:
+              type: integer
+              description: Consecutive read cycles in which no sensor read succeeded
+              example: 0
+            seconds_since_last_success:
+              type:
+                - integer
+                - "null"
+              description: Monotonic seconds since any sensor last read successfully, or null before the first success
+              example: 2
 
     Sensor:
       type: object
