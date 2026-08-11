@@ -60,6 +60,7 @@ esp_err_t wifi_manager_init(void)
     s_wifi_event_group = xEventGroupCreate();
 
     s_wifi_netif = esp_netif_create_default_wifi_sta();
+    ESP_ERROR_CHECK(esp_netif_set_hostname(s_wifi_netif, CONFIG_MDNS_HOSTNAME));
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));

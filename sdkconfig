@@ -416,7 +416,7 @@ CONFIG_USE_ETHERNET=y
 CONFIG_USE_WIFI_FALLBACK=y
 CONFIG_WIFI_SSID="your_wifi_ssid"
 CONFIG_WIFI_PASSWORD="your_wifi_password"
-CONFIG_MDNS_HOSTNAME="esp-temp-monitor"
+CONFIG_MDNS_HOSTNAME="thermux"
 # end of Network Configuration
 
 #

@@ -71,7 +71,7 @@ static esp_err_t init_mdns(void)
     }
 
     /* Use simple hostname - mDNS handles collisions automatically */
-    const char *hostname = "thermux";
+    const char *hostname = CONFIG_MDNS_HOSTNAME;
     
     mdns_hostname_set(hostname);
     mdns_instance_name_set("Thermux Temperature Monitor");
