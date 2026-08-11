@@ -24,6 +24,14 @@ typedef struct {
     uint32_t failed_reads;               /**< Failed read count for this sensor */
 } onewire_sensor_t;
 
+typedef struct {
+    uint32_t recent_total_reads;
+    uint32_t recent_failed_reads;
+    uint32_t consecutive_failed_cycles;
+    uint64_t seconds_since_last_success;
+    bool has_successful_read;
+} onewire_bus_health_t;
+
 /**
  * @brief Initialize 1-Wire bus
  * @param gpio_num GPIO pin connected to 1-Wire data line
@@ -75,6 +83,11 @@ esp_err_t onewire_temp_set_resolution(int bits);
  * @param failed_reads Output: number of failed reads (CRC errors, etc.)
  */
 void onewire_temp_get_error_stats(uint32_t *total_reads, uint32_t *failed_reads);
+
+/**
+ * @brief Get recent and cycle-level bus health statistics
+ */
+void onewire_temp_get_bus_health(onewire_bus_health_t *health);
 
 /**
  * @brief Reset bus error statistics counters to zero

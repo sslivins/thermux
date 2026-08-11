@@ -12,6 +12,7 @@
 #include "wifi_manager.h"
 #include "ota_updater.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
@@ -338,6 +339,70 @@ static cJSON* create_device_info(void)
     return device;
 }
 
+static esp_err_t register_diagnostic_sensor(const char *object_id,
+                                            const char *name,
+                                            const char *icon,
+                                            const char *device_class,
+                                            const char *unit,
+                                            const char *state_class,
+                                            bool enabled_by_default)
+{
+    char discovery_topic[256];
+    snprintf(discovery_topic, sizeof(discovery_topic),
+             "%s/sensor/%s_%s/config",
+             CONFIG_HA_DISCOVERY_PREFIX, CONFIG_MQTT_BASE_TOPIC, object_id);
+
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    cJSON_AddStringToObject(root, "name", name);
+
+    char unique_id[96];
+    snprintf(unique_id, sizeof(unique_id), "%s_%s", CONFIG_MQTT_BASE_TOPIC, object_id);
+    cJSON_AddStringToObject(root, "unique_id", unique_id);
+
+    char state_topic[128];
+    snprintf(state_topic, sizeof(state_topic), "%s/diagnostic/%s",
+             CONFIG_MQTT_BASE_TOPIC, object_id);
+    cJSON_AddStringToObject(root, "state_topic", state_topic);
+
+    char availability_topic[128];
+    snprintf(availability_topic, sizeof(availability_topic), "%s/status",
+             CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "availability_topic", availability_topic);
+
+    cJSON_AddStringToObject(root, "entity_category", "diagnostic");
+    if (icon != NULL) {
+        cJSON_AddStringToObject(root, "icon", icon);
+    }
+    if (device_class != NULL) {
+        cJSON_AddStringToObject(root, "device_class", device_class);
+    }
+    if (unit != NULL) {
+        cJSON_AddStringToObject(root, "unit_of_measurement", unit);
+    }
+    if (state_class != NULL) {
+        cJSON_AddStringToObject(root, "state_class", state_class);
+    }
+    if (!enabled_by_default) {
+        cJSON_AddBoolToObject(root, "enabled_by_default", false);
+    }
+    cJSON_AddItemToObject(root, "device", create_device_info());
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (payload == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    int msg_id = esp_mqtt_client_publish(s_mqtt_client, discovery_topic,
+                                         payload, 0, 1, 1);
+    free(payload);
+    return msg_id < 0 ? ESP_FAIL : ESP_OK;
+}
+
 esp_err_t mqtt_ha_register_update_entity(void)
 {
 #if CONFIG_OTA_ENABLED && CONFIG_HA_DISCOVERY_ENABLED
@@ -581,7 +646,7 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void)
                  CONFIG_HA_DISCOVERY_PREFIX, CONFIG_MQTT_BASE_TOPIC);
 
         cJSON *root = cJSON_CreateObject();
-        cJSON_AddStringToObject(root, "name", "Bus Error Rate");
+        cJSON_AddStringToObject(root, "name", "Bus Lifetime Error Rate");
         
         char unique_id[64];
         snprintf(unique_id, sizeof(unique_id), "%s_bus_error_rate", CONFIG_MQTT_BASE_TOPIC);
@@ -599,6 +664,7 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void)
         cJSON_AddStringToObject(root, "entity_category", "diagnostic");
         cJSON_AddStringToObject(root, "unit_of_measurement", "%");
         cJSON_AddStringToObject(root, "state_class", "measurement");
+        cJSON_AddBoolToObject(root, "enabled_by_default", false);
         
         cJSON_AddItemToObject(root, "device", create_device_info());
 
@@ -637,6 +703,7 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void)
         cJSON_AddStringToObject(root, "icon", "mdi:counter");
         cJSON_AddStringToObject(root, "entity_category", "diagnostic");
         cJSON_AddStringToObject(root, "state_class", "total_increasing");
+        cJSON_AddBoolToObject(root, "enabled_by_default", false);
         
         cJSON_AddItemToObject(root, "device", create_device_info());
 
@@ -675,6 +742,7 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void)
         cJSON_AddStringToObject(root, "icon", "mdi:alert-circle");
         cJSON_AddStringToObject(root, "entity_category", "diagnostic");
         cJSON_AddStringToObject(root, "state_class", "total_increasing");
+        cJSON_AddBoolToObject(root, "enabled_by_default", false);
         
         cJSON_AddItemToObject(root, "device", create_device_info());
 
@@ -687,6 +755,19 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void)
             ESP_LOGD(TAG, "Registered diagnostic: Bus Failed Reads");
         }
     }
+
+    register_diagnostic_sensor("uptime", "Uptime", "mdi:timer-outline",
+                               "duration", "s", "measurement", true);
+    register_diagnostic_sensor("bus_recent_error_rate", "Bus Recent Error Rate",
+                               "mdi:alert-circle-outline", NULL, "%",
+                               "measurement", true);
+    register_diagnostic_sensor("bus_seconds_since_success",
+                               "Seconds Since Last Successful Read",
+                               "mdi:timer-check-outline", "duration", "s",
+                               "measurement", true);
+    register_diagnostic_sensor("bus_consecutive_failed_cycles",
+                               "Consecutive Failed Bus Cycles",
+                               "mdi:counter", NULL, NULL, "measurement", true);
 
     return ESP_OK;
 #else
@@ -724,26 +805,60 @@ esp_err_t mqtt_ha_publish_diagnostics(void)
     
     ESP_LOGD(TAG, "Published diagnostics: eth=%d, wifi=%d, ip=%s", eth_connected, wifi_connected, ip);
 
-    /* Publish bus error statistics */
+    /* Publish bus health and error statistics */
     uint32_t total_reads, failed_reads;
     onewire_temp_get_error_stats(&total_reads, &failed_reads);
+    onewire_bus_health_t health;
+    onewire_temp_get_bus_health(&health);
     
     char value_buf[32];
+    snprintf(topic, sizeof(topic), "%s/diagnostic/uptime", CONFIG_MQTT_BASE_TOPIC);
+    snprintf(value_buf, sizeof(value_buf), "%llu",
+             (unsigned long long)(esp_timer_get_time() / 1000000));
+    esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 1);
+
     snprintf(topic, sizeof(topic), "%s/diagnostic/bus_error_rate", CONFIG_MQTT_BASE_TOPIC);
     snprintf(value_buf, sizeof(value_buf), "%.2f", total_reads > 0 ? (double)failed_reads / total_reads * 100.0 : 0.0);
-    esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 0);
+    esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 1);
+
+    snprintf(topic, sizeof(topic), "%s/diagnostic/bus_recent_error_rate", CONFIG_MQTT_BASE_TOPIC);
+    snprintf(value_buf, sizeof(value_buf), "%.2f",
+             health.recent_total_reads > 0
+                 ? (double)health.recent_failed_reads / health.recent_total_reads * 100.0
+                 : 0.0);
+    esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 1);
     
     snprintf(topic, sizeof(topic), "%s/diagnostic/bus_total_reads", CONFIG_MQTT_BASE_TOPIC);
     snprintf(value_buf, sizeof(value_buf), "%lu", (unsigned long)total_reads);
-    esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 0);
+    esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 1);
     
     snprintf(topic, sizeof(topic), "%s/diagnostic/bus_failed_reads", CONFIG_MQTT_BASE_TOPIC);
     snprintf(value_buf, sizeof(value_buf), "%lu", (unsigned long)failed_reads);
-    esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 0);
+    esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 1);
+
+    snprintf(topic, sizeof(topic), "%s/diagnostic/bus_seconds_since_success",
+             CONFIG_MQTT_BASE_TOPIC);
+    if (health.has_successful_read) {
+        snprintf(value_buf, sizeof(value_buf), "%llu",
+                 (unsigned long long)health.seconds_since_last_success);
+        esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 1);
+    } else {
+        esp_mqtt_client_publish(s_mqtt_client, topic, "", 0, 1, 1);
+    }
+
+    snprintf(topic, sizeof(topic), "%s/diagnostic/bus_consecutive_failed_cycles",
+             CONFIG_MQTT_BASE_TOPIC);
+    snprintf(value_buf, sizeof(value_buf), "%lu",
+             (unsigned long)health.consecutive_failed_cycles);
+    esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 1);
     
-    ESP_LOGD(TAG, "Published bus stats: total=%lu, failed=%lu, rate=%.2f%%", 
+    ESP_LOGD(TAG, "Published bus stats: total=%lu, failed=%lu, lifetime=%.2f%%, recent=%.2f%%, failed_cycles=%lu",
              (unsigned long)total_reads, (unsigned long)failed_reads,
-             total_reads > 0 ? (double)failed_reads / total_reads * 100.0 : 0.0);
+             total_reads > 0 ? (double)failed_reads / total_reads * 100.0 : 0.0,
+             health.recent_total_reads > 0
+                 ? (double)health.recent_failed_reads / health.recent_total_reads * 100.0
+                 : 0.0,
+             (unsigned long)health.consecutive_failed_cycles);
 
     return ESP_OK;
 }

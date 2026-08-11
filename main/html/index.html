@@ -233,7 +233,16 @@
                 MQTT: <span id="mqtt-status" class="status-offline">Offline</span>
             </div>
             <div class="status-item" title="Click to reset" style="cursor: pointer;" onclick="resetErrorStats()">
-                Bus Errors: <span id="bus-error-rate">-</span>
+                Recent Bus Errors: <span id="bus-error-rate">-</span>
+            </div>
+            <div class="status-item">
+                Last Good Read: <span id="bus-last-success">-</span>
+            </div>
+            <div class="status-item">
+                Failed Cycles: <span id="bus-failed-cycles">-</span>
+            </div>
+            <div class="status-item">
+                Uptime: <span id="uptime">-</span>
             </div>
             <div class="status-item">
                 Last Update: <span id="last-update">-</span>
@@ -291,6 +300,19 @@
             return false;
         }
 
+        function formatDuration(totalSeconds) {
+            if (totalSeconds === null || totalSeconds === undefined) return 'No data';
+            const seconds = Math.max(0, Math.floor(totalSeconds));
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const remainder = seconds % 60;
+            if (days > 0) return `${days}d ${hours}h`;
+            if (hours > 0) return `${hours}h ${minutes}m`;
+            if (minutes > 0) return `${minutes}m ${remainder}s`;
+            return `${remainder}s`;
+        }
+
         async function fetchSensors() {
             if (isEditing) return;
             try {
@@ -334,6 +356,7 @@
                 document.getElementById('version').textContent = 'Version ' + status.version;
                 document.getElementById('mqtt-status').textContent = status.mqtt_connected ? 'Online' : 'Offline';
                 document.getElementById('mqtt-status').className = status.mqtt_connected ? 'status-online' : 'status-offline';
+                document.getElementById('uptime').textContent = formatDuration(status.uptime_seconds);
                 /* Update bus error stats */
                 if (status.bus_stats) {
                     const s = status.bus_stats;
@@ -342,9 +365,19 @@
                         el.textContent = 'No data';
                         el.className = '';
                     } else {
-                        el.textContent = s.error_rate.toFixed(2) + '% (' + s.failed_reads + '/' + s.total_reads + ')';
-                        el.className = s.failed_reads > 0 ? 'status-offline' : 'status-online';
+                        el.textContent = s.recent_error_rate.toFixed(2) + '%';
+                        el.title = 'Lifetime: ' + s.error_rate.toFixed(2) + '% (' + s.failed_reads + '/' + s.total_reads + ')';
+                        el.className = s.recent_error_rate > 0 ? 'status-offline' : 'status-online';
                     }
+                    const lastSuccess = document.getElementById('bus-last-success');
+                    lastSuccess.textContent = s.seconds_since_last_success === null
+                        ? 'No successful read'
+                        : formatDuration(s.seconds_since_last_success) + ' ago';
+                    lastSuccess.className = s.consecutive_failed_cycles > 0 ? 'status-offline' : 'status-online';
+
+                    const failedCycles = document.getElementById('bus-failed-cycles');
+                    failedCycles.textContent = s.consecutive_failed_cycles;
+                    failedCycles.className = s.consecutive_failed_cycles > 0 ? 'status-offline' : 'status-online';
                 }
                 /* Warn if at max sensor limit */
                 const warn = document.getElementById('max-sensor-warning');

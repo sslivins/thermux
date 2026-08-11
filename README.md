@@ -108,7 +108,7 @@ View it interactively: [Swagger Editor](https://editor.swagger.io/?url=https://r
 
 ## Home Assistant Integration
 
-The device automatically registers sensors with Home Assistant via MQTT discovery. Each sensor appears as a temperature entity. Diagnostic entities for network status and bus error rates are also published.
+The device automatically registers sensors with Home Assistant via MQTT discovery. Each sensor appears as a temperature entity. Diagnostics include network status, uptime, seconds since the last successful bus read, consecutive failed bus cycles, and a rolling error rate across the most recent 1,000 reads. Lifetime read counters remain available as disabled-by-default engineering diagnostics.
 
 ### Firmware Update Entity
 

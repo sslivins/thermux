@@ -324,7 +324,7 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "version", APP_VERSION);
     cJSON_AddNumberToObject(root, "sensor_count", sensor_manager_get_count());
     cJSON_AddNumberToObject(root, "max_sensors", CONFIG_MAX_SENSORS);
-    cJSON_AddNumberToObject(root, "uptime_seconds", esp_log_timestamp() / 1000);
+    cJSON_AddNumberToObject(root, "uptime_seconds", esp_timer_get_time() / 1000000);
     cJSON_AddNumberToObject(root, "free_heap", esp_get_free_heap_size());
     
     extern bool mqtt_ha_is_connected(void);
@@ -341,10 +341,24 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     /* Bus error statistics */
     uint32_t total_reads, failed_reads;
     onewire_temp_get_error_stats(&total_reads, &failed_reads);
+    onewire_bus_health_t health;
+    onewire_temp_get_bus_health(&health);
     cJSON *bus_stats = cJSON_CreateObject();
     cJSON_AddNumberToObject(bus_stats, "total_reads", total_reads);
     cJSON_AddNumberToObject(bus_stats, "failed_reads", failed_reads);
     cJSON_AddNumberToObject(bus_stats, "error_rate", total_reads > 0 ? (double)failed_reads / total_reads * 100.0 : 0.0);
+    cJSON_AddNumberToObject(bus_stats, "recent_error_rate",
+                            health.recent_total_reads > 0
+                                ? (double)health.recent_failed_reads / health.recent_total_reads * 100.0
+                                : 0.0);
+    cJSON_AddNumberToObject(bus_stats, "consecutive_failed_cycles",
+                            health.consecutive_failed_cycles);
+    if (health.has_successful_read) {
+        cJSON_AddNumberToObject(bus_stats, "seconds_since_last_success",
+                                health.seconds_since_last_success);
+    } else {
+        cJSON_AddNullToObject(bus_stats, "seconds_since_last_success");
+    }
     cJSON_AddItemToObject(root, "bus_stats", bus_stats);
 
     char *json = cJSON_PrintUnformatted(root);

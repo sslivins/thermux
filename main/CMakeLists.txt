@@ -36,6 +36,7 @@ idf_component_register(
         "main.c"
         "wifi_manager.c"
         "ethernet_manager.c"
+        "bus_stats.c"
         "onewire_temp.c"
         "mqtt_client_ha.c"
         "web_server.c"
