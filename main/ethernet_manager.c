@@ -95,6 +95,7 @@ esp_err_t ethernet_manager_init(void)
     /* Create default event loop if not already created */
     esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_ETH();
     s_eth_netif = esp_netif_new(&netif_cfg);
+    ESP_ERROR_CHECK(esp_netif_set_hostname(s_eth_netif, CONFIG_MDNS_HOSTNAME));
 
     /* Configure Ethernet MAC */
     eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
