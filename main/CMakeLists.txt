@@ -60,8 +60,6 @@ idf_component_register(
         esp_netif
         esp_event
         driver
-    EMBED_TXTFILES
-        "certs/github_root_ca.pem"
     EMBED_FILES
         "${HTML_BUILD_DIR}/index.html.gz"
         "${HTML_BUILD_DIR}/config.html.gz"
