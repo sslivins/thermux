@@ -32,6 +32,13 @@ menu "Thermux Configuration"
             default "thermux"
             help
                 Device hostname for mDNS discovery (accessible as hostname.local)
+
+        config NTP_SERVER
+            string "NTP Server"
+            default "pool.ntp.org"
+            help
+                NTP server used to sync the wall clock (SNTP). The synced time is
+                used to report the "Last Boot" timestamp to Home Assistant.
     endmenu
 
     menu "MQTT Configuration"
@@ -138,6 +145,16 @@ menu "Thermux Configuration"
             depends on OTA_ENABLED
             help
                 Automatically install updates when available (otherwise just notify)
+
+        config OTA_HEALTHCHECK_TIMEOUT_S
+            int "OTA health-check timeout (seconds)"
+            default 60
+            range 15 600
+            help
+                After an OTA update the new firmware boots in a pending state and
+                must confirm itself healthy (network up) within this window, or
+                the bootloader rolls back to the previous known-good firmware.
+                Only effective when Bootloader app rollback is enabled.
     endmenu
 
     menu "Web Server Configuration"

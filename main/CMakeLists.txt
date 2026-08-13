@@ -45,6 +45,7 @@ idf_component_register(
         "sensor_manager.c"
         "log_buffer.c"
         "version_utils.c"
+        "time_sync.c"
     INCLUDE_DIRS "."
     REQUIRES 
         nvs_flash
