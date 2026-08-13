@@ -37,3 +37,10 @@ target_link_libraries(test_runner unity)
 
 # Register test with CTest
 add_test(NAME unit_tests COMMAND test_runner)
+
+# Build-configuration invariant checks (safety net + flash-footprint settings).
+# Runs as a standalone CMake script so it needs no compilation or ESP-IDF.
+add_test(
+    NAME build_config_invariants
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/check_build_config.cmake
+)
