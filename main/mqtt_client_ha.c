@@ -11,11 +11,13 @@
 #include "ethernet_manager.h"
 #include "wifi_manager.h"
 #include "ota_updater.h"
+#include "time_sync.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 static const char *TAG = "mqtt_ha";
 
@@ -523,6 +525,15 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    /* Remove the old retained "Uptime" (seconds) discovery, superseded by the
+       "Last Boot" timestamp sensor. Empty retained payload deletes the entity. */
+    {
+        char old_topic[256];
+        snprintf(old_topic, sizeof(old_topic), "%s/sensor/%s_uptime/config",
+                 CONFIG_HA_DISCOVERY_PREFIX, CONFIG_MQTT_BASE_TOPIC);
+        esp_mqtt_client_publish(s_mqtt_client, old_topic, "", 0, 1, 1);
+    }
+
     /* Register Ethernet Status binary sensor */
     {
         char discovery_topic[256];
@@ -756,8 +767,8 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void)
         }
     }
 
-    register_diagnostic_sensor("uptime", "Uptime", "mdi:timer-outline",
-                               "duration", "s", "measurement", true);
+    register_diagnostic_sensor("last_boot", "Last Boot", "mdi:clock-start",
+                               "timestamp", NULL, NULL, true);
     register_diagnostic_sensor("bus_recent_error_rate", "Bus Recent Error Rate",
                                "mdi:alert-circle-outline", NULL, "%",
                                "measurement", true);
@@ -812,10 +823,18 @@ esp_err_t mqtt_ha_publish_diagnostics(void)
     onewire_temp_get_bus_health(&health);
     
     char value_buf[32];
-    snprintf(topic, sizeof(topic), "%s/diagnostic/uptime", CONFIG_MQTT_BASE_TOPIC);
-    snprintf(value_buf, sizeof(value_buf), "%llu",
-             (unsigned long long)(esp_timer_get_time() / 1000000));
-    esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 1);
+    /* Report wall-clock boot time as an ISO-8601 timestamp so HA renders it as
+       a self-updating "x days ago". Empty payload => "unknown" until synced. */
+    snprintf(topic, sizeof(topic), "%s/diagnostic/last_boot", CONFIG_MQTT_BASE_TOPIC);
+    time_t boot_time;
+    if (time_sync_get_boot_time(&boot_time)) {
+        struct tm tm_utc;
+        gmtime_r(&boot_time, &tm_utc);
+        strftime(value_buf, sizeof(value_buf), "%Y-%m-%dT%H:%M:%S+00:00", &tm_utc);
+        esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 1);
+    } else {
+        esp_mqtt_client_publish(s_mqtt_client, topic, "", 0, 1, 1);
+    }
 
     snprintf(topic, sizeof(topic), "%s/diagnostic/bus_error_rate", CONFIG_MQTT_BASE_TOPIC);
     snprintf(value_buf, sizeof(value_buf), "%.2f", total_reads > 0 ? (double)failed_reads / total_reads * 100.0 : 0.0);

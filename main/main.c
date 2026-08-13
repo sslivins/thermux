@@ -17,6 +17,7 @@
 #include "esp_event.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
+#include "esp_ota_ops.h"
 #include "mdns.h"
 
 #include "nvs_storage.h"
@@ -28,6 +29,7 @@
 #include "web_server.h"
 #include "ota_updater.h"
 #include "log_buffer.h"
+#include "time_sync.h"
 
 static const char *TAG = "main";
 
@@ -36,7 +38,7 @@ EventGroupHandle_t network_event_group;
 const int NETWORK_CONNECTED_BIT = BIT0;
 
 /* Application version - update for each release */
-const char *APP_VERSION = "2.8.6";
+const char *APP_VERSION = "2.9.0";
 
 /* Runtime sensor settings (can be changed via web UI) */
 static uint32_t s_read_interval_ms = CONFIG_SENSOR_READ_INTERVAL_MS;
@@ -91,6 +93,47 @@ static esp_err_t init_mdns(void)
     ESP_LOGD(TAG, "mDNS hostname: %s.local", hostname);
     ESP_LOGD(TAG, "mDNS services: _http._tcp, _thermux._tcp");
     return ESP_OK;
+}
+
+/**
+ * @brief Confirm the running firmware healthy, or roll back after a bad OTA
+ *
+ * With bootloader app-rollback enabled, a freshly flashed image boots in the
+ * PENDING_VERIFY state. We confirm it (so the bootloader keeps it) once the
+ * device proves healthy - here, the network came up. If the health check
+ * failed we invalidate the image and reboot into the previous known-good slot.
+ * On a normal boot (image already marked valid) this is a no-op, so it is safe
+ * to call unconditionally.
+ *
+ * @param healthy true if the post-boot health check passed (network is up)
+ */
+static void ota_confirm_or_rollback(bool healthy)
+{
+#if CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t state;
+    if (running == NULL || esp_ota_get_state_partition(running, &state) != ESP_OK) {
+        return;
+    }
+    if (state != ESP_OTA_IMG_PENDING_VERIFY) {
+        return; /* already valid (or factory) - nothing to verify */
+    }
+
+    if (healthy) {
+        esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "New firmware verified healthy; rollback cancelled");
+        } else {
+            ESP_LOGE(TAG, "mark_app_valid failed: %s", esp_err_to_name(err));
+        }
+    } else {
+        ESP_LOGE(TAG, "New firmware failed health check; rolling back to previous slot");
+        esp_ota_mark_app_invalid_rollback_and_reboot(); /* reboots; does not return */
+        ESP_LOGE(TAG, "Rollback not possible (no previous slot); staying on current image");
+    }
+#else
+    (void)healthy;
+#endif
 }
 
 /**
@@ -339,11 +382,32 @@ void app_main(void)
     #endif
 #endif
 
-    /* Wait for network connection */
+    /* Wait for network connection. Bounded so a freshly-OTA'd image that
+       breaks networking triggers a rollback instead of hanging forever in
+       the PENDING_VERIFY state (where it would never be marked good). */
     ESP_LOGD(TAG, "Waiting for network connection...");
-    xEventGroupWaitBits(network_event_group, NETWORK_CONNECTED_BIT,
-                        pdFALSE, pdTRUE, portMAX_DELAY);
-    ESP_LOGI(TAG, "Network connected!");
+    EventBits_t net_bits = xEventGroupWaitBits(
+        network_event_group, NETWORK_CONNECTED_BIT, pdFALSE, pdTRUE,
+        pdMS_TO_TICKS(CONFIG_OTA_HEALTHCHECK_TIMEOUT_S * 1000));
+
+    if (net_bits & NETWORK_CONNECTED_BIT) {
+        ESP_LOGI(TAG, "Network connected!");
+        /* Health check passed: keep this firmware. */
+        ota_confirm_or_rollback(true);
+    } else {
+        ESP_LOGE(TAG, "No network after %d s", CONFIG_OTA_HEALTHCHECK_TIMEOUT_S);
+        /* If this is a pending OTA image, a missing network means the update
+           is bad: roll back to the previous slot (does not return). On a
+           normal boot this is a no-op and we keep waiting below. */
+        ota_confirm_or_rollback(false);
+        ESP_LOGW(TAG, "Continuing to wait for network...");
+        xEventGroupWaitBits(network_event_group, NETWORK_CONNECTED_BIT,
+                            pdFALSE, pdTRUE, portMAX_DELAY);
+        ESP_LOGI(TAG, "Network connected!");
+    }
+
+    /* Start SNTP so we can report a wall-clock "Last Boot" time to HA */
+    time_sync_init();
 
     /* Initialize mDNS */
     init_mdns();
