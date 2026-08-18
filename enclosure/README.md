@@ -2,19 +2,40 @@
 
 3D printable enclosure designs for the Thermux temperature monitor.
 
+There are two separate enclosures:
+
+- **ESP32-POE-ISO Case** - houses the main controller board (Olimex ESP32-POE-ISO) and breakout PCB.
+- **Temperature Node** - houses a distributed DS18B20 sensor node along the 1-Wire bus.
+
 ## Directory Structure
 
 ```
 enclosure/
-├── fusion360/      # Autodesk Fusion 360 source files (.f3d)
+├── fusion360/      # Autodesk Fusion 360 source files (.f3d / .f3z)
 ├── step/           # Universal CAD interchange format (.step)
 ├── print/          # Print-ready files (.3mf, .stl)
 └── README.md
 ```
 
+## Files
+
+### ESP32-POE-ISO Case (main controller)
+
+- `fusion360/Thermux ESP32-POE-ISO Case.f3z` - Fusion 360 source (archive)
+- `step/Thermux ESP32-POE-ISO Case.step` - STEP
+- `print/ESP32-POE-ISO Case - Base.3mf` - print-ready base
+- `print/ESP32-POE-ISO Case - Lid.3mf` - print-ready lid
+
+### Temperature Node (DS18B20 sensor node)
+
+- `fusion360/Thermux Temperature Node.f3d` - Fusion 360 source
+- `step/Thermux Temperature Node.step` - STEP
+- `print/Base.3mf` - print-ready base
+- `print/Lid.3mf` - print-ready lid
+
 ## File Formats
 
-- **Fusion 360 (.f3d)** - Full design history for parametric editing (requires Fusion 360)
+- **Fusion 360 (.f3d / .f3z)** - Full design history for parametric editing (requires Fusion 360). `.f3z` is a Fusion archive export.
 - **STEP (.step)** - Universal CAD format for other software (FreeCAD, SolidWorks, OnShape, etc.)
 - **3MF (.3mf)** - Modern print format with colors/materials/settings (preferred)
 - **STL (.stl)** - Legacy mesh format for older slicers

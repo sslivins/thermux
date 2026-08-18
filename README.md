@@ -257,9 +257,14 @@ Custom breakout board with RJ45 connectors for daisy-chaining DS18B20 sensors.
 
 ### Enclosure ([enclosure/](enclosure/))
 
-3D printable case for the ESP32-POE and breakout board.
+3D printable cases, in two parts:
 
-- **Fusion 360** (.f3d) - Parametric source files
+- **ESP32-POE-ISO Case** - houses the main controller board and breakout PCB
+- **Temperature Node** - houses a distributed DS18B20 sensor node on the 1-Wire bus
+
+Each is provided as:
+
+- **Fusion 360** (.f3d / .f3z) - Parametric source files
 - **STEP** (.step) - Universal CAD interchange format
 - **Print files** (.3mf, .stl) - Ready for slicing
 
