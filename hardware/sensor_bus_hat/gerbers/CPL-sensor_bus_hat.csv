@@ -1,0 +1,4 @@
+Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
+J1,BUS,GCT_MJ3225-88-0_REVA,131.318,-101.5,90.0,top
+J2,Conn_01x10_Pin,PinSocket_1x10_P2.54mm_Vertical,122.77,-101.63,0.0,top
+R1,4.7k,R_0805_2012Metric,128.0,-90.0,0.0,top
