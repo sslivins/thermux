@@ -262,8 +262,8 @@ Two open-source KiCad boards:
 
 3D printable cases, in two parts:
 
-- **ESP32-POE-ISO Case** - houses the main controller board and breakout PCB
-- **Temperature Node** - houses a distributed DS18B20 sensor node on the 1-Wire bus
+- **ESP32-POE-ISO Case** - the main enclosure; houses the ESP32-POE-ISO with the Sensor Bus Hat plugged on
+- **Temperature Node** - two-part case (PCB + enclosure) for a distributed DS18B20 sensor node on the 1-Wire bus
 
 Each is provided as:
 
