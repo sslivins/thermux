@@ -49,6 +49,21 @@ Houses the Olimex ESP32-POE-ISO with the Sensor Bus Hat plugged onto it.
 - **Infill**: 20-30%
 - **Supports**: As needed
 
+## Assembly Hardware
+
+Fasteners are not 3D-printed and must be sourced separately.
+
+### ESP32-POE-ISO Case (main enclosure)
+
+| Qty | Part | Notes |
+|-----|------|-------|
+| 4 | M3 × 4mm brass heat-set inserts | Press into the case bosses (one per corner) with a soldering iron |
+| 4 | M3 × 6mm hex-head bolts | Fasten the lid to the case, one per corner |
+
+### Temperature Node
+
+Friction fit — **no fasteners required**. The lid press-fits onto the base.
+
 ## License
 
 Enclosure designs are released under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
