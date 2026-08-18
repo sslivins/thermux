@@ -4,8 +4,8 @@
 
 There are two separate enclosures:
 
-- **ESP32-POE-ISO Case** - houses the main controller board (Olimex ESP32-POE-ISO) and breakout PCB.
-- **Temperature Node** - houses a distributed DS18B20 sensor node along the 1-Wire bus.
+- **ESP32-POE-ISO Case** - the main enclosure. Houses the Olimex ESP32-POE-ISO with the **Sensor Bus Hat** plugged onto it (the Sensor Bus Hat has no enclosure of its own).
+- **Temperature Node** - a two-part design (PCB + case) that houses a distributed DS18B20 sensor node along the 1-Wire bus.
 
 ## Directory Structure
 
@@ -19,7 +19,9 @@ enclosure/
 
 ## Files
 
-### ESP32-POE-ISO Case (main controller)
+### ESP32-POE-ISO Case (main enclosure)
+
+Houses the Olimex ESP32-POE-ISO with the Sensor Bus Hat plugged onto it.
 
 - `fusion360/Thermux ESP32-POE-ISO Case.f3z` - Fusion 360 source (archive)
 - `step/Thermux ESP32-POE-ISO Case.step` - STEP
