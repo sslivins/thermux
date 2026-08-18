@@ -249,7 +249,10 @@ This repository includes open-source hardware designs:
 
 ### PCB ([hardware/](hardware/))
 
-Custom breakout board with RJ45 connectors for daisy-chaining DS18B20 sensors.
+Two open-source KiCad boards:
+
+- **Sensor Bus Hat** - plugs onto the ESP32-POE-ISO and breaks the 1-Wire bus out to RJ45 (carries the bus pull-up resistor)
+- **Temperature Node** - DS18B20 breakout with RJ45 connectors for daisy-chaining sensors
 
 - **KiCad project files** - Full schematic and PCB layout
 - **Gerber files** - Ready for fabrication (JLCPCB, PCBWay, etc.)
