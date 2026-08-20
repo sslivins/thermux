@@ -303,16 +303,28 @@ esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *fou
     }
     s_ds18b20_handles = calloc(max_sensors, sizeof(ds18b20_device_handle_t));
     
-    /* Iterate through all devices */
+    /* Iterate through all devices. Cap consecutive bus errors so a missing/
+       failing bus (e.g. no sensor wired, noisy line) can't spin this loop
+       forever - treat repeated failures the same as "no devices found". */
+    const int max_consecutive_errors = 5;
+    int consecutive_errors = 0;
     while (count < max_sensors) {
         err = onewire_device_iter_get_next(iter, &next_device);
         if (err == ESP_ERR_NOT_FOUND) {
             break;  /* No more devices */
         }
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Error iterating devices: %s", esp_err_to_name(err));
+            consecutive_errors++;
+            ESP_LOGW(TAG, "Error iterating devices: %s (%d/%d)",
+                     esp_err_to_name(err), consecutive_errors, max_consecutive_errors);
+            if (consecutive_errors >= max_consecutive_errors) {
+                ESP_LOGW(TAG, "Too many consecutive bus errors, aborting scan");
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
+        consecutive_errors = 0;
 
         /* Check if this is a DS18B20 (family code 0x28) */
         if ((next_device.address & 0xFF) != DS18B20_FAMILY_CODE) {
