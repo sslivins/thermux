@@ -56,9 +56,20 @@ static portMUX_TYPE s_stats_lock = portMUX_INITIALIZER_UNLOCKED;
  * A sensor failing either check is flagged as "not genuine" so the UI can
  * surface a non-blocking notice. This never prevents the sensor from being
  * used - it's purely informational.
+ *
+ * The raw COUNT_REMAIN/COUNT_PER_C bytes (and whether the scratchpad read
+ * itself succeeded) are written back to the sensor struct so they can be
+ * inspected remotely via /api/sensors, since some clone families forge the
+ * ROM pattern too and it's useful to see the actual scratchpad values
+ * rather than just a pass/fail bool.
  */
-static bool ds18b20_check_genuine(const uint8_t *address)
+static bool ds18b20_check_genuine(const uint8_t *address, bool *check_ok,
+                                   uint8_t *count_remain_out, uint8_t *count_per_c_out)
 {
+    *check_ok = false;
+    *count_remain_out = 0;
+    *count_per_c_out = 0;
+
     /* Check 1: ROM pattern 28-xx-xx-xx-xx-00-00-xx */
     if (address[5] != 0x00 || address[6] != 0x00) {
         return false;
@@ -87,8 +98,11 @@ static bool ds18b20_check_genuine(const uint8_t *address)
         return true;
     }
 
+    *check_ok = true;
     uint8_t count_remain = scratchpad[6];
     uint8_t count_per_c = scratchpad[7];
+    *count_remain_out = count_remain;
+    *count_per_c_out = count_per_c;
     if (count_per_c != 0x10 || count_remain > count_per_c) {
         return false;
     }
@@ -189,7 +203,10 @@ esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *fou
         sensors[count].last_read_time = 0;
         sensors[count].total_reads = 0;
         sensors[count].failed_reads = 0;
-        sensors[count].genuine = ds18b20_check_genuine(sensors[count].address);
+        sensors[count].genuine = ds18b20_check_genuine(sensors[count].address,
+                                                         &sensors[count].genuine_check_ok,
+                                                         &sensors[count].count_remain,
+                                                         &sensors[count].count_per_c);
 
         /* Create DS18B20 device handle */
         ds18b20_config_t ds18b20_config = {};
@@ -207,6 +224,12 @@ esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *fou
         ESP_LOGD(TAG, "Found DS18B20: %s", addr_str);
         if (!sensors[count].genuine) {
             ESP_LOGW(TAG, "Sensor %s does not match a genuine DS18B20 pattern (likely a clone)", addr_str);
+        }
+        if (!sensors[count].genuine_check_ok) {
+            ESP_LOGW(TAG, "Sensor %s: scratchpad genuineness check could not complete (bus/CRC error) - assuming genuine", addr_str);
+        } else {
+            ESP_LOGD(TAG, "Sensor %s scratchpad: COUNT_REMAIN=0x%02X COUNT_PER_C=0x%02X",
+                     addr_str, sensors[count].count_remain, sensors[count].count_per_c);
         }
 
         count++;
