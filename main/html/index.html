@@ -502,7 +502,7 @@
                                onfocus="isEditing = true"
                                onkeydown="if(event.key==='Enter') { this.blur(); } else if(event.key==='Escape') { this.dataset.cancelled = '1'; this.blur(); }"
                                onblur="if(this.dataset.cancelled === '1') { cancelEditName('${sensor.address}'); } else { saveName('${sensor.address}', this.value); }">
-                        <button class="edit-name-btn" title="Cancel" onmousedown="event.preventDefault(); cancelEditName('${sensor.address}')">✖️</button>
+                        <button class="edit-name-btn" title="Cancel" onmousedown="event.preventDefault(); document.getElementById('name-input-${sensor.address}').dataset.cancelled='1'; document.getElementById('name-input-${sensor.address}').blur();">✖️</button>
                     </div>
                     <div class="sensor-address">${sensor.address}</div>
                     <div class="sensor-temp">${sensor.valid ? sensor.temperature.toFixed(1) + '°C' : '--.-°C'}</div>
