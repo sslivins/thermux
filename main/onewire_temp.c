@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "onewire_bus.h"
 #include "onewire_cmd.h"
+#include "onewire_crc.h"
 #include "ds18b20.h"
 #include <string.h>
 
@@ -33,6 +34,67 @@ static portMUX_TYPE s_stats_lock = portMUX_INITIALIZER_UNLOCKED;
 /* DS18B20 family code and commands */
 #define DS18B20_FAMILY_CODE     0x28
 #define DS18B20_CMD_CONVERT     0x44
+#define DS18B20_CMD_READ_SCRATCHPAD 0xBE
+
+/*
+ * Genuine-chip detection.
+ *
+ * Most "knock-off"/counterfeit DS18B20 sensors sold on ebay/AliExpress are
+ * clones that don't fully replicate the internal behavior of the authentic
+ * Maxim/Analog Devices part. This is a best-effort heuristic (not a
+ * guarantee) based on the two checks popularized by Chris Petrich's
+ * "counterfeit_DS18B20" project (https://github.com/cpetrich/counterfeit_DS18B20):
+ *
+ *   1. ROM pattern: genuine parts follow 28-xx-xx-xx-xx-00-00-xx, i.e. the
+ *      two serial bytes immediately before the CRC byte (address[5] and
+ *      address[6]) are always 0x00.
+ *   2. Scratchpad bytes 6/7 (COUNT_REMAIN / COUNT_PER_C): on a genuine part
+ *      COUNT_PER_C is always 0x10 and COUNT_REMAIN never exceeds it. Many
+ *      clones leave these bytes fixed at the wrong value or violate that
+ *      relationship.
+ *
+ * A sensor failing either check is flagged as "not genuine" so the UI can
+ * surface a non-blocking notice. This never prevents the sensor from being
+ * used - it's purely informational.
+ */
+static bool ds18b20_check_genuine(const uint8_t *address)
+{
+    /* Check 1: ROM pattern 28-xx-xx-xx-xx-00-00-xx */
+    if (address[5] != 0x00 || address[6] != 0x00) {
+        return false;
+    }
+
+    /* Check 2: read the scratchpad and inspect COUNT_REMAIN/COUNT_PER_C */
+    uint8_t tx_buffer[10];
+    tx_buffer[0] = ONEWIRE_CMD_MATCH_ROM;
+    memcpy(&tx_buffer[1], address, ONEWIRE_ROM_SIZE);
+    tx_buffer[9] = DS18B20_CMD_READ_SCRATCHPAD;
+
+    if (onewire_bus_reset(s_bus_handle) != ESP_OK) {
+        /* Can't verify - assume genuine rather than falsely flagging it */
+        return true;
+    }
+    if (onewire_bus_write_bytes(s_bus_handle, tx_buffer, sizeof(tx_buffer)) != ESP_OK) {
+        return true;
+    }
+
+    uint8_t scratchpad[9];
+    if (onewire_bus_read_bytes(s_bus_handle, scratchpad, sizeof(scratchpad)) != ESP_OK) {
+        return true;
+    }
+    if (onewire_crc8(0, scratchpad, 8) != scratchpad[8]) {
+        /* CRC failure - don't make a genuineness claim off bad data */
+        return true;
+    }
+
+    uint8_t count_remain = scratchpad[6];
+    uint8_t count_per_c = scratchpad[7];
+    if (count_per_c != 0x10 || count_remain > count_per_c) {
+        return false;
+    }
+
+    return true;
+}
 
 static void record_read_attempt(bool failed)
 {
@@ -127,6 +189,7 @@ esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *fou
         sensors[count].last_read_time = 0;
         sensors[count].total_reads = 0;
         sensors[count].failed_reads = 0;
+        sensors[count].genuine = ds18b20_check_genuine(sensors[count].address);
 
         /* Create DS18B20 device handle */
         ds18b20_config_t ds18b20_config = {};
@@ -142,6 +205,9 @@ esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *fou
         char addr_str[17];
         onewire_address_to_string(sensors[count].address, addr_str);
         ESP_LOGD(TAG, "Found DS18B20: %s", addr_str);
+        if (!sensors[count].genuine) {
+            ESP_LOGW(TAG, "Sensor %s does not match a genuine DS18B20 pattern (likely a clone)", addr_str);
+        }
 
         count++;
     }

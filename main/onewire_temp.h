@@ -22,6 +22,9 @@ typedef struct {
     int64_t last_read_time;              /**< Timestamp of last reading */
     uint32_t total_reads;                /**< Total read attempts for this sensor */
     uint32_t failed_reads;               /**< Failed read count for this sensor */
+    bool genuine;                         /**< True if the sensor's ROM/scratchpad pattern
+                                                matches a genuine Maxim/Analog Devices DS18B20.
+                                                False indicates a likely clone/counterfeit chip. */
 } onewire_sensor_t;
 
 typedef struct {
