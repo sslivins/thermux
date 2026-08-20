@@ -73,6 +73,7 @@
             padding: 20px;
             border: 1px solid rgba(255,255,255,0.1);
             transition: transform 0.2s, box-shadow 0.2s, border-color 0.3s, background 0.3s;
+            position: relative;
         }
         .sensor-card:hover {
             transform: translateY(-5px);
@@ -157,17 +158,29 @@
             align-items: center;
             gap: 6px;
         }
-        .clone-badge {
-            font-size: 0.75em;
+        .clone-badge, .genuine-badge {
+            position: absolute;
+            top: 16px;
+            right: 18px;
+            font-size: 1.1em;
             cursor: help;
-            opacity: 0.85;
+            opacity: 0.9;
         }
         .genuine-badge {
-            font-size: 0.75em;
-            cursor: help;
-            opacity: 0.85;
             color: #22c55e;
         }
+        .edit-name-btn {
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 0.85em;
+            padding: 2px 4px;
+            line-height: 1;
+            opacity: 0.7;
+            transition: opacity 0.2s, color 0.2s;
+        }
+        .edit-name-btn:hover { opacity: 1; color: #60a5fa; }
         .sensor-address {
             font-size: 0.8em;
             color: #888;
@@ -475,22 +488,43 @@
                 
                 return `
                 <div class="${cardClass}" data-address="${sensor.address}">
-                    <div class="sensor-name">${sensor.friendly_name || sensor.address}${sensor.genuine === false ? '<span class="clone-badge" title="Possible clone/counterfeit" onclick="showToast(\'⚠️ Possible clone/counterfeit sensor\', true)">⚠️</span>' : (sensor.genuine === true ? '<span class="genuine-badge" title="Verified genuine DS18B20" onclick="showToast(\'🛡️ Verified genuine DS18B20\')">🛡️</span>' : '')}</div>
+                    ${sensor.genuine === false ? '<span class="clone-badge" title="Possible clone/counterfeit" onclick="showToast(\'⚠️ Possible clone/counterfeit sensor\', true)">⚠️</span>' : (sensor.genuine === true ? '<span class="genuine-badge" title="Verified genuine DS18B20" onclick="showToast(\'🛡️ Verified genuine DS18B20\')">🛡️</span>' : '')}
+                    <div class="sensor-name" id="name-display-${sensor.address}">
+                        <span id="name-text-${sensor.address}">${sensor.friendly_name || sensor.address}</span>
+                        <button class="edit-name-btn" title="Edit name" onclick="startEditName('${sensor.address}')">✏️</button>
+                    </div>
+                    <div class="sensor-name" id="name-edit-${sensor.address}" style="display:none;">
+                        <input type="text" class="sensor-name-input"
+                               id="name-input-${sensor.address}"
+                               placeholder="Enter friendly name"
+                               value="${sensor.friendly_name || ''}"
+                               onfocus="isEditing = true"
+                               onkeypress="if(event.key==='Enter') saveName('${sensor.address}', this.value)">
+                        <button class="edit-name-btn" title="Save" onclick="saveName('${sensor.address}', document.getElementById('name-input-${sensor.address}').value)">💾</button>
+                        <button class="edit-name-btn" title="Cancel" onclick="cancelEditName('${sensor.address}')">✖️</button>
+                    </div>
                     <div class="sensor-address">${sensor.address}</div>
                     <div class="sensor-temp">${sensor.valid ? sensor.temperature.toFixed(1) + '°C' : '--.-°C'}</div>
                     ${changeHtml}
                     <div class="sensor-error-rate" style="font-size:0.8em;color:${sensor.failed_reads > 0 ? '#f87171' : '#4ade80'};margin-top:5px;cursor:pointer;" title="Click to reset this sensor's error stats" onclick="resetSensorErrors('${sensor.address}')">Errors: ${sensor.total_reads > 0 ? (sensor.failed_reads / sensor.total_reads * 100).toFixed(2) + '% (' + sensor.failed_reads + '/' + sensor.total_reads + ')' : 'No data'}</div>
-                    <input type="text" class="sensor-name-input" 
-                           placeholder="Enter friendly name" 
-                           value="${sensor.friendly_name || ''}"
-                           onfocus="isEditing = true"
-                           onblur="isEditing = false"
-                           onkeypress="if(event.key==='Enter') saveName('${sensor.address}', this.value)">
-                    <button class="btn btn-primary" onclick="saveName('${sensor.address}', this.previousElementSibling.value)">
-                        Save Name
-                    </button>
                 </div>
             `}).join('');
+        }
+
+        function startEditName(address) {
+            isEditing = true;
+            document.getElementById('name-display-' + address).style.display = 'none';
+            const editRow = document.getElementById('name-edit-' + address);
+            editRow.style.display = 'flex';
+            const input = document.getElementById('name-input-' + address);
+            input.focus();
+            input.select();
+        }
+
+        function cancelEditName(address) {
+            isEditing = false;
+            document.getElementById('name-edit-' + address).style.display = 'none';
+            document.getElementById('name-display-' + address).style.display = 'flex';
         }
 
         async function saveName(address, name) {
@@ -502,6 +536,7 @@
                 });
                 if (checkAuthError(response)) return;
                 if (response.ok) {
+                    isEditing = false;
                     showToast('Name saved successfully');
                     fetchSensors();
                 } else {
