@@ -162,6 +162,12 @@
             cursor: help;
             opacity: 0.85;
         }
+        .genuine-badge {
+            font-size: 0.75em;
+            cursor: help;
+            opacity: 0.85;
+            color: #22c55e;
+        }
         .sensor-address {
             font-size: 0.8em;
             color: #888;
@@ -469,7 +475,7 @@
                 
                 return `
                 <div class="${cardClass}" data-address="${sensor.address}">
-                    <div class="sensor-name">${sensor.friendly_name || sensor.address}${sensor.genuine === false ? '<span class="clone-badge" title="This sensor doesn\'t match the expected ROM/scratchpad pattern of a genuine Maxim/Analog Devices DS18B20 and may be a counterfeit/clone. It will still work, but readings may be less accurate.">⚠️</span>' : ''}</div>
+                    <div class="sensor-name">${sensor.friendly_name || sensor.address}${sensor.genuine === false ? '<span class="clone-badge" title="This sensor doesn\'t match the expected ROM/scratchpad pattern of a genuine Maxim/Analog Devices DS18B20 and may be a counterfeit/clone. It will still work, but readings may be less accurate.">⚠️</span>' : (sensor.genuine === true ? '<span class="genuine-badge" title="This sensor passed all genuine-part checks (ROM/scratchpad pattern and conversion-time timing) and appears to be an authentic Maxim/Analog Devices DS18B20.">✅</span>' : '')}</div>
                     <div class="sensor-address">${sensor.address}</div>
                     <div class="sensor-temp">${sensor.valid ? sensor.temperature.toFixed(1) + '°C' : '--.-°C'}</div>
                     ${changeHtml}
