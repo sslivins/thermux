@@ -167,30 +167,38 @@
         .file-input-label:hover { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.5); }
         .file-input-label.has-file { border-color: #22c55e; background: rgba(34, 197, 94, 0.1); }
         .file-input { display: none; }
+        .fw-card-group {
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid rgba(255,255,255,0.15);
+            margin-bottom: 20px;
+        }
         .fw-tabs {
             display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
         }
         .fw-tab {
             flex: 1;
-            padding: 12px 16px;
-            border-radius: 10px;
-            border: 2px solid rgba(255,255,255,0.15);
-            background: rgba(255,255,255,0.05);
+            padding: 14px 16px;
+            background: rgba(255,255,255,0.03);
             color: #888;
             cursor: pointer;
             text-align: center;
             font-size: 1em;
+            font-weight: 600;
+            border-bottom: 2px solid rgba(255,255,255,0.15);
             transition: all 0.2s;
         }
-        .fw-tab:hover { border-color: rgba(255,255,255,0.3); color: #ccc; }
+        .fw-tab:hover { color: #ccc; background: rgba(255,255,255,0.06); }
         .fw-tab.active {
-            border-color: #3b82f6;
-            background: rgba(59, 130, 246, 0.1);
+            background: rgba(59, 130, 246, 0.12);
             color: #fff;
+            border-bottom-color: #3b82f6;
         }
-        .fw-tab-content { display: none; }
+        .fw-tab-content {
+            display: none;
+            padding: 20px;
+            background: rgba(255,255,255,0.02);
+        }
         .fw-tab-content.active { display: block; }
     </style>
 </head>
@@ -300,24 +308,26 @@
                 <span class="version-value" id="fw-current-version">Loading...</span>
             </div>
 
-            <div class="fw-tabs">
-                <div class="fw-tab active" id="tab-cloud" onclick="switchFwTab('cloud')">☁️ Cloud</div>
-                <div class="fw-tab" id="tab-file" onclick="switchFwTab('file')">📁 Local File</div>
-            </div>
-
-            <div class="fw-tab-content active" id="tab-content-cloud">
-                <div class="version-row">
-                    <span class="version-label">Latest Version</span>
-                    <span class="version-value" id="fw-latest-version">-</span>
+            <div class="fw-card-group">
+                <div class="fw-tabs">
+                    <div class="fw-tab active" id="tab-cloud" onclick="switchFwTab('cloud')">☁️ Cloud</div>
+                    <div class="fw-tab" id="tab-file" onclick="switchFwTab('file')">📁 Local File</div>
                 </div>
-                <div class="update-status current" id="cloud-status">Click "Check for Updates" to check for a new version</div>
-                <button class="btn btn-secondary" id="check-btn" onclick="checkForUpdates()" style="width: 100%;">🔍 Check for Updates</button>
-            </div>
 
-            <div class="fw-tab-content" id="tab-content-file">
-                <input type="file" id="firmware-file" class="file-input" accept=".bin" onchange="handleFileSelect(this)">
-                <label for="firmware-file" class="file-input-label" id="file-label">📁 Select firmware file (.bin)</label>
-                <div class="form-hint" style="margin-top: 8px;">For downgrades or custom builds</div>
+                <div class="fw-tab-content active" id="tab-content-cloud">
+                    <div class="version-row">
+                        <span class="version-label">Latest Version</span>
+                        <span class="version-value" id="fw-latest-version">-</span>
+                    </div>
+                    <div class="update-status current" id="cloud-status">Click "Check for Updates" to check for a new version</div>
+                    <button class="btn btn-secondary" id="check-btn" onclick="checkForUpdates()" style="width: 100%;">🔍 Check for Updates</button>
+                </div>
+
+                <div class="fw-tab-content" id="tab-content-file">
+                    <input type="file" id="firmware-file" class="file-input" accept=".bin" onchange="handleFileSelect(this)">
+                    <label for="firmware-file" class="file-input-label" id="file-label">📁 Select firmware file (.bin)</label>
+                    <div class="form-hint" style="margin-top: 8px;">For downgrades or custom builds</div>
+                </div>
             </div>
 
             <div class="progress-bar" id="progress-bar">
