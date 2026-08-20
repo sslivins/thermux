@@ -31,6 +31,39 @@ if(EXISTS ${HTML_SRC_DIR})
     endif()
 endif()
 
+# EXPERIMENTAL (issue #48 / experiment/partition-migration-test): compile the
+# Stage A / Stage B partition table CSVs into .bin blobs so the migration
+# module can embed and flash them. Not used unless partition_migration.c is
+# invoked, which currently only happens on the experimental branch's manual
+# debug endpoint - never shipped to the production OTA channel.
+set(MIGRATION_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/migration_tables")
+file(MAKE_DIRECTORY ${MIGRATION_BUILD_DIR})
+set(GEN_ESP32PART "$ENV{IDF_PATH}/components/partition_table/gen_esp32part.py")
+
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} "${GEN_ESP32PART}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../partitions_stageA.csv"
+            "${MIGRATION_BUILD_DIR}/partitions_stageA.bin"
+    RESULT_VARIABLE STAGEA_RESULT
+    OUTPUT_VARIABLE STAGEA_OUTPUT
+    ERROR_VARIABLE STAGEA_ERROR
+)
+if(NOT STAGEA_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to generate Stage A partition table: ${STAGEA_ERROR}")
+endif()
+
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} "${GEN_ESP32PART}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../partitions_stageB.csv"
+            "${MIGRATION_BUILD_DIR}/partitions_stageB.bin"
+    RESULT_VARIABLE STAGEB_RESULT
+    OUTPUT_VARIABLE STAGEB_OUTPUT
+    ERROR_VARIABLE STAGEB_ERROR
+)
+if(NOT STAGEB_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to generate Stage B partition table: ${STAGEB_ERROR}")
+endif()
+
 idf_component_register(
     SRCS 
         "main.c"
@@ -46,6 +79,7 @@ idf_component_register(
         "log_buffer.c"
         "version_utils.c"
         "time_sync.c"
+        "partition_migration.c"
     INCLUDE_DIRS "."
     REQUIRES 
         nvs_flash
@@ -60,7 +94,10 @@ idf_component_register(
         esp_netif
         esp_event
         driver
+        spi_flash
     EMBED_FILES
         "${HTML_BUILD_DIR}/index.html.gz"
         "${HTML_BUILD_DIR}/config.html.gz"
+        "${MIGRATION_BUILD_DIR}/partitions_stageA.bin"
+        "${MIGRATION_BUILD_DIR}/partitions_stageB.bin"
 )

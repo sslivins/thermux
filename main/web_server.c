@@ -11,6 +11,7 @@
 #include "wifi_manager.h"
 #include "ethernet_manager.h"
 #include "log_buffer.h"
+#include "partition_migration.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -65,6 +66,13 @@ extern const uint8_t index_html_gz_start[] asm("_binary_index_html_gz_start");
 extern const uint8_t index_html_gz_end[] asm("_binary_index_html_gz_end");
 extern const uint8_t config_html_gz_start[] asm("_binary_config_html_gz_start");
 extern const uint8_t config_html_gz_end[] asm("_binary_config_html_gz_end");
+
+/* EXPERIMENTAL (issue #48): embedded Stage A / Stage B partition table blobs
+ * for the test-device-only OTA partition migration. See partition_migration.c. */
+extern const uint8_t partitions_stageA_bin_start[] asm("_binary_partitions_stageA_bin_start");
+extern const uint8_t partitions_stageA_bin_end[] asm("_binary_partitions_stageA_bin_end");
+extern const uint8_t partitions_stageB_bin_start[] asm("_binary_partitions_stageB_bin_start");
+extern const uint8_t partitions_stageB_bin_end[] asm("_binary_partitions_stageB_bin_end");
 
 /**
  * @brief Load auth config from NVS (called at startup)
@@ -887,6 +895,68 @@ upload_error:
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"success\":false,\"message\":\"Upload failed\"}");
     return ESP_FAIL;
+}
+
+/**
+ * @brief EXPERIMENTAL (issue #48) - Handler for POST /api/migrate/stage-a
+ *
+ * Test-device-only. Triggers Stage A of the OTA-only partition migration
+ * (drop dead factory partition, grow ota_0). NEVER call this against the
+ * production field device (192.168.10.127) until proven safe via extensive
+ * testing (including deliberate power-cycle fault injection) on a spare
+ * device. See partition_migration.c for the full design/safety writeup.
+ *
+ * On success this reboots the device and the HTTP response will not be
+ * received (connection drops); on failure it returns JSON with the error
+ * and the device is left in its original, still-bootable state.
+ */
+static esp_err_t api_migrate_stage_a_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+
+    ESP_LOGW(TAG, "EXPERIMENTAL migration Stage A triggered via HTTP endpoint");
+
+    size_t table_len = partitions_stageA_bin_end - partitions_stageA_bin_start;
+    esp_err_t err = partition_migration_run_stage_a(partitions_stageA_bin_start, table_len);
+
+    /* Only reached on failure - success reboots before we get here. */
+    httpd_resp_set_type(req, "application/json");
+    char msg[160];
+    snprintf(msg, sizeof(msg),
+             "{\"success\":false,\"message\":\"Stage A failed: %s\"}",
+             esp_err_to_name(err));
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    httpd_resp_sendstr(req, msg);
+    return ESP_OK;
+}
+
+/**
+ * @brief EXPERIMENTAL (issue #48) - Handler for POST /api/migrate/stage-b
+ *
+ * Test-device-only. Triggers Stage B (final step) of the OTA-only partition
+ * migration (shrink ota_0 back down, grow ota_1 to match). Must only be
+ * called after Stage A has already succeeded and the device has rebooted
+ * into the enlarged ota_0. See partition_migration_run_stage_b() for the
+ * precondition check (refuses to run from the wrong partition/size).
+ */
+static esp_err_t api_migrate_stage_b_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+
+    ESP_LOGW(TAG, "EXPERIMENTAL migration Stage B triggered via HTTP endpoint");
+
+    size_t table_len = partitions_stageB_bin_end - partitions_stageB_bin_start;
+    esp_err_t err = partition_migration_run_stage_b(partitions_stageB_bin_start, table_len);
+
+    /* Only reached on failure - success reboots before we get here. */
+    httpd_resp_set_type(req, "application/json");
+    char msg[160];
+    snprintf(msg, sizeof(msg),
+             "{\"success\":false,\"message\":\"Stage B failed: %s\"}",
+             esp_err_to_name(err));
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    httpd_resp_sendstr(req, msg);
+    return ESP_OK;
 }
 
 /**
@@ -1756,7 +1826,7 @@ esp_err_t web_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = CONFIG_WEB_SERVER_PORT;
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 32;  /* 28 endpoints + room for future */
+    config.max_uri_handlers = 40;  /* 35 endpoints (incl. experimental migration) + room for future */
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
@@ -1871,6 +1941,22 @@ esp_err_t web_server_start(void)
         .handler = api_ota_upload_handler,
     };
     REGISTER_URI(ota_upload_uri);
+
+    /* EXPERIMENTAL (issue #48): test-device-only partition migration endpoints.
+     * Never call these against the production field device. */
+    httpd_uri_t migrate_stage_a_uri = {
+        .uri = "/api/migrate/stage-a",
+        .method = HTTP_POST,
+        .handler = api_migrate_stage_a_handler,
+    };
+    REGISTER_URI(migrate_stage_a_uri);
+
+    httpd_uri_t migrate_stage_b_uri = {
+        .uri = "/api/migrate/stage-b",
+        .method = HTTP_POST,
+        .handler = api_migrate_stage_b_handler,
+    };
+    REGISTER_URI(migrate_stage_b_uri);
 
     /* Configuration page */
     httpd_uri_t config_uri = {

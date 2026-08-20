@@ -1,0 +1,14 @@
+# Stage A target layout - migration test only (see issue #48 / experiment/partition-migration-test)
+#
+# Drops the dead `factory` partition and grows ota_0 to absorb its space.
+# ota_1 is left completely untouched (same offset/size as the original
+# table) so it is guaranteed safe to write into from a device that is
+# currently *running* ota_1.
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+otadata,  data, ota,     0xf000,   0x2000,
+phy_init, data, phy,     0x11000,  0x1000,
+ota_0,    app,  ota_0,   0x20000,  0x2A0000,
+ota_1,    app,  ota_1,   0x2C0000, 0x130000,
+storage,  data, nvs,     0x3F0000, 0x10000,
