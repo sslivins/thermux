@@ -35,6 +35,8 @@ static portMUX_TYPE s_stats_lock = portMUX_INITIALIZER_UNLOCKED;
 #define DS18B20_FAMILY_CODE     0x28
 #define DS18B20_CMD_CONVERT     0x44
 #define DS18B20_CMD_READ_SCRATCHPAD 0xBE
+#define DS18B20_CMD_WRITE_SCRATCHPAD 0x4E
+#define DS18B20_CONFIG_12BIT    0x7F
 
 /*
  * Genuine-chip detection.
@@ -61,8 +63,10 @@ static portMUX_TYPE s_stats_lock = portMUX_INITIALIZER_UNLOCKED;
  *      Family C, etc.) because they don't replicate the original's slow
  *      ADC/analog design. A sensor converting in under ~400ms cannot be an
  *      authentic part, even if it fakes the ROM pattern/scratchpad bytes.
- *      This check is only meaningful when the sensor is in 12-bit
- *      resolution mode, since conversion time scales with resolution.
+ *      This check temporarily forces 12-bit mode via the scratchpad (not
+ *      EEPROM) for the duration of the measurement, then restores the
+ *      device's normal resolution, so it works regardless of the
+ *      normally-configured read resolution.
  *
  * A sensor failing any check is flagged as "not genuine" so the UI can
  * surface a non-blocking notice. This never prevents the sensor from being
@@ -88,17 +92,43 @@ static portMUX_TYPE s_stats_lock = portMUX_INITIALIZER_UNLOCKED;
 /**
  * @brief Measure how long a 12-bit temperature conversion actually takes.
  *
- * Issues Match ROM + Convert T, then polls the bus (a genuine/most clone
- * DS18B20 pulls the line low while busy and releases it to high once the
- * conversion completes) until it goes high or DS18B20_MAX_CONVERSION_WAIT_MS
- * elapses. Assumes the device is in external-power mode (not parasitic),
+ * Temporarily writes the scratchpad's resolution/config byte to force 12-bit
+ * mode (regardless of the device's globally configured resolution) so the
+ * timing side-channel is meaningful even when the device is normally run at
+ * a lower resolution, then issues Match ROM + Convert T and polls the bus
+ * (a genuine/most clone DS18B20 pulls the line low while busy and releases
+ * it to high once the conversion completes) until it goes high or
+ * DS18B20_MAX_CONVERSION_WAIT_MS elapses. The original TH/TL/config bytes
+ * are restored afterwards (scratchpad only - not written to EEPROM) so this
+ * has no lasting effect on the sensor's configured alarm thresholds or
+ * resolution. Assumes the device is in external-power mode (not parasitic),
  * which is the case for all sensors driven by this project's driver.
  *
+ * @param address 8-byte ROM address of the sensor to test
+ * @param th Current TH (alarm high) scratchpad byte, to restore afterwards
+ * @param tl Current TL (alarm low) scratchpad byte, to restore afterwards
  * @return Measured time in milliseconds, or -1 if the measurement couldn't
  *         be completed (bus error, or busy line never released).
  */
-static int ds18b20_measure_conversion_time_ms(const uint8_t *address)
+static int ds18b20_measure_conversion_time_ms(const uint8_t *address, uint8_t th, uint8_t tl,
+                                               uint8_t original_config)
 {
+    /* Force 12-bit resolution in the scratchpad (not EEPROM) for this test */
+    uint8_t tx_write[13];
+    tx_write[0] = ONEWIRE_CMD_MATCH_ROM;
+    memcpy(&tx_write[1], address, ONEWIRE_ROM_SIZE);
+    tx_write[9] = DS18B20_CMD_WRITE_SCRATCHPAD;
+    tx_write[10] = th;
+    tx_write[11] = tl;
+    tx_write[12] = DS18B20_CONFIG_12BIT;
+
+    if (onewire_bus_reset(s_bus_handle) != ESP_OK) {
+        return -1;
+    }
+    if (onewire_bus_write_bytes(s_bus_handle, tx_write, sizeof(tx_write)) != ESP_OK) {
+        return -1;
+    }
+
     uint8_t tx_buffer[10];
     tx_buffer[0] = ONEWIRE_CMD_MATCH_ROM;
     memcpy(&tx_buffer[1], address, ONEWIRE_ROM_SIZE);
@@ -113,18 +143,35 @@ static int ds18b20_measure_conversion_time_ms(const uint8_t *address)
 
     int64_t start_us = esp_timer_get_time();
     int64_t deadline_us = start_us + (int64_t)DS18B20_MAX_CONVERSION_WAIT_MS * 1000;
+    int result_ms = -1;
     while (esp_timer_get_time() < deadline_us) {
         uint8_t bit = 0;
         if (onewire_bus_read_bit(s_bus_handle, &bit) != ESP_OK) {
-            return -1;
+            result_ms = -1;
+            break;
         }
         if (bit) {
             /* Conversion complete */
-            return (int)((esp_timer_get_time() - start_us) / 1000);
+            result_ms = (int)((esp_timer_get_time() - start_us) / 1000);
+            break;
         }
         vTaskDelay(pdMS_TO_TICKS(5));
     }
-    return -1;  /* Never completed within the wait window */
+
+    /* Restore the original config byte (scratchpad only) so the sensor's
+     * normally-configured resolution is unaffected by this test. */
+    uint8_t tx_restore[13];
+    tx_restore[0] = ONEWIRE_CMD_MATCH_ROM;
+    memcpy(&tx_restore[1], address, ONEWIRE_ROM_SIZE);
+    tx_restore[9] = DS18B20_CMD_WRITE_SCRATCHPAD;
+    tx_restore[10] = th;
+    tx_restore[11] = tl;
+    tx_restore[12] = original_config;
+    if (onewire_bus_reset(s_bus_handle) == ESP_OK) {
+        onewire_bus_write_bytes(s_bus_handle, tx_restore, sizeof(tx_restore));
+    }
+
+    return result_ms;
 }
 
 static bool ds18b20_check_genuine(const uint8_t *address, bool *check_ok,
@@ -174,14 +221,14 @@ static bool ds18b20_check_genuine(const uint8_t *address, bool *check_ok,
         return false;
     }
 
-    /* Check 3: 12-bit conversion timing side-channel. Only meaningful when
-     * running at 12-bit resolution, since conversion time scales with it. */
-    if (s_resolution == 12) {
-        int conv_ms = ds18b20_measure_conversion_time_ms(address);
-        *conversion_time_ms_out = conv_ms;
-        if (conv_ms >= 0 && conv_ms < DS18B20_MIN_GENUINE_CONVERSION_MS) {
-            return false;
-        }
+    /* Check 3: 12-bit conversion timing side-channel. Scratchpad layout is
+     * [0-1]=temperature [2]=TH [3]=TL [4]=config [5,6,7]=reserved [8]=CRC.
+     * Force 12-bit mode for the test (restored afterwards) so the check is
+     * meaningful regardless of the device's normally-configured resolution. */
+    int conv_ms = ds18b20_measure_conversion_time_ms(address, scratchpad[2], scratchpad[3], scratchpad[4]);
+    *conversion_time_ms_out = conv_ms;
+    if (conv_ms >= 0 && conv_ms < DS18B20_MIN_GENUINE_CONVERSION_MS) {
+        return false;
     }
 
     return true;
