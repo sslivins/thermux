@@ -499,9 +499,9 @@
                                placeholder="Enter friendly name"
                                value="${sensor.friendly_name || ''}"
                                onfocus="isEditing = true"
-                               onkeypress="if(event.key==='Enter') saveName('${sensor.address}', this.value)">
-                        <button class="edit-name-btn" title="Save" onclick="saveName('${sensor.address}', document.getElementById('name-input-${sensor.address}').value)">💾</button>
-                        <button class="edit-name-btn" title="Cancel" onclick="cancelEditName('${sensor.address}')">✖️</button>
+                               onkeydown="if(event.key==='Enter') { this.blur(); } else if(event.key==='Escape') { this.dataset.cancelled = '1'; this.blur(); }"
+                               onblur="if(this.dataset.cancelled === '1') { cancelEditName('${sensor.address}'); } else { saveName('${sensor.address}', this.value); }">
+                        <button class="edit-name-btn" title="Cancel" onmousedown="event.preventDefault(); cancelEditName('${sensor.address}')">✖️</button>
                     </div>
                     <div class="sensor-address">${sensor.address}</div>
                     <div class="sensor-temp">${sensor.valid ? sensor.temperature.toFixed(1) + '°C' : '--.-°C'}</div>
