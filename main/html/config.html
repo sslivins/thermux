@@ -202,14 +202,16 @@
         <div class="config-section">
             <div class="section-title">🌐 Network Configuration</div>
             <div class="version-row" style="margin-bottom: 15px;">
+                <span class="version-label">IP Address</span>
+                <span id="network-ip" style="color: #60a5fa; font-weight: bold;">Loading...</span>
+            </div>
+            <div class="version-row" style="margin-bottom: 15px;">
                 <span class="version-label">Ethernet</span>
                 <span id="eth-status" class="status-badge status-disconnected">Checking...</span>
-                <span id="eth-ip" style="color: #aaa; margin-left: 10px; font-size: 0.9em;"></span>
             </div>
             <div class="version-row" style="margin-bottom: 15px;">
                 <span class="version-label">WiFi</span>
                 <span id="wifi-status" class="status-badge status-disconnected">Checking...</span>
-                <span id="wifi-ip" style="color: #aaa; margin-left: 10px; font-size: 0.9em;"></span>
             </div>
             <div class="form-hint" style="margin-bottom: 15px;">Ethernet is preferred when available. WiFi is used as fallback.</div>
             <form id="wifi-form">
@@ -412,10 +414,13 @@
 
         async function loadConfig() {
             try {
+                const statusResp = await fetch('/api/status', {cache: 'no-store'});
+                const status = await statusResp.json();
+
                 const wifiResp = await fetch('/api/config/wifi');
                 if (checkAuthError(wifiResp)) return;
                 const wifi = await wifiResp.json();
-                document.getElementById('wifi-ssid-current').textContent = 'Current: ' + (wifi.ssid || 'Not set');
+                document.getElementById('wifi-ssid-current').textContent = 'Current: ' + (status.wifi_connected ? (wifi.ssid || 'Not set') : 'Disconnected');
                 document.getElementById('wifi-ssid').placeholder = wifi.ssid || 'Enter WiFi network name';
 
                 const mqttResp = await fetch('/api/config/mqtt', {cache: 'no-store'});
@@ -425,22 +430,21 @@
                 document.getElementById('mqtt-uri').placeholder = mqtt.uri || 'mqtt://host:1883';
                 document.getElementById('mqtt-username').placeholder = mqtt.username || 'Username';
                 
-                const statusResp = await fetch('/api/status', {cache: 'no-store'});
-                const status = await statusResp.json();
                 const mqttBadge = document.getElementById('mqtt-status');
                 mqttBadge.textContent = status.mqtt_connected ? 'Connected' : 'Disconnected';
                 mqttBadge.className = 'status-badge ' + (status.mqtt_connected ? 'status-connected' : 'status-disconnected');
                 document.getElementById('fw-current-version').textContent = status.version;
                 
-                /* Update network status */
+                /* Update network status - show a single active IP regardless of interface,
+                   and the eth/wifi connection badges independently */
                 const ethBadge = document.getElementById('eth-status');
                 const wifiBadge = document.getElementById('wifi-status');
                 ethBadge.textContent = status.ethernet_connected ? 'Connected' : 'Disconnected';
                 ethBadge.className = 'status-badge ' + (status.ethernet_connected ? 'status-connected' : 'status-disconnected');
                 wifiBadge.textContent = status.wifi_connected ? 'Connected' : 'Disconnected';
                 wifiBadge.className = 'status-badge ' + (status.wifi_connected ? 'status-connected' : 'status-disconnected');
-                document.getElementById('eth-ip').textContent = status.ethernet_ip || '';
-                document.getElementById('wifi-ip').textContent = status.wifi_ip || '';
+                const activeIp = status.ethernet_connected ? status.ethernet_ip : (status.wifi_connected ? status.wifi_ip : '');
+                document.getElementById('network-ip').textContent = activeIp || 'No IP address';
 
                 const sensorResp = await fetch('/api/config/sensor', {cache: 'no-store'});
                 const sensor = await sensorResp.json();
