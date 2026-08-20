@@ -319,6 +319,16 @@
         let updateInterval;
         let isEditing = false;
 
+        /* Pure decision function for the inline name-edit blur handler.
+           Extracted so it can be unit tested without a DOM/browser. */
+        function shouldSaveOnBlur(cancelled) {
+            return cancelled !== '1';
+        }
+        /* istanbul ignore next -- exposed only for Node test harness, no-op in browser */
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = { shouldSaveOnBlur };
+        }
+
         /* Check for auth errors and redirect to login if session expired */
         function checkAuthError(response) {
             if (response.status === 401) {
@@ -501,7 +511,7 @@
                                value="${sensor.friendly_name || ''}"
                                onfocus="isEditing = true"
                                onkeydown="if(event.key==='Enter') { this.blur(); } else if(event.key==='Escape') { this.dataset.cancelled = '1'; this.blur(); }"
-                               onblur="if(this.dataset.cancelled === '1') { cancelEditName('${sensor.address}'); } else { saveName('${sensor.address}', this.value); }">
+                               onblur="if(!shouldSaveOnBlur(this.dataset.cancelled)) { cancelEditName('${sensor.address}'); } else { saveName('${sensor.address}', this.value); }">
                         <button class="edit-name-btn" title="Cancel" onmousedown="event.preventDefault(); document.getElementById('name-input-${sensor.address}').dataset.cancelled='1'; document.getElementById('name-input-${sensor.address}').blur();">✖️</button>
                     </div>
                     <div class="sensor-address">${sensor.address}</div>
