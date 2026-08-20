@@ -63,6 +63,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             mqtt_ha_publish_update_state(APP_VERSION, latest, NULL, -1);
         }
 #endif
+
+        /* Subscribe to the HA "Rescan Sensors" button command */
+        {
+            char rescan_cmd_topic[128];
+            snprintf(rescan_cmd_topic, sizeof(rescan_cmd_topic), "%s/rescan/trigger", CONFIG_MQTT_BASE_TOPIC);
+            esp_mqtt_client_subscribe(s_mqtt_client, rescan_cmd_topic, 1);
+        }
         break;
         
     case MQTT_EVENT_DISCONNECTED:
@@ -99,6 +106,21 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             }
         }
 #endif
+
+        /* Rescan Sensors button */
+        {
+            char rescan_cmd_topic[128];
+            int rescan_cmd_len = snprintf(rescan_cmd_topic, sizeof(rescan_cmd_topic),
+                                          "%s/rescan/trigger", CONFIG_MQTT_BASE_TOPIC);
+            if (event->topic_len == rescan_cmd_len &&
+                strncmp(event->topic, rescan_cmd_topic, rescan_cmd_len) == 0) {
+                ESP_LOGI(TAG, "HA requested sensor bus rescan");
+                esp_err_t rescan_err = sensor_manager_rescan();
+                if (rescan_err != ESP_OK) {
+                    ESP_LOGW(TAG, "Sensor rescan failed: %s", esp_err_to_name(rescan_err));
+                }
+            }
+        }
         break;
         
     default:
@@ -315,6 +337,9 @@ esp_err_t mqtt_ha_publish_discovery_all(void)
     /* Register the firmware update entity */
     mqtt_ha_register_update_entity();
 #endif
+
+    /* Register the rescan sensors button */
+    mqtt_ha_register_rescan_button();
     
     ESP_LOGD(TAG, "Published discovery for %d sensors + diagnostics", count);
     return ESP_OK;
@@ -464,6 +489,64 @@ esp_err_t mqtt_ha_register_update_entity(void)
     }
 
     ESP_LOGD(TAG, "Registered firmware update entity with HA");
+    return ESP_OK;
+#else
+    return ESP_OK;
+#endif
+}
+
+esp_err_t mqtt_ha_register_rescan_button(void)
+{
+#if CONFIG_HA_DISCOVERY_ENABLED
+    if (!s_connected || s_mqtt_client == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char discovery_topic[256];
+    snprintf(discovery_topic, sizeof(discovery_topic),
+             "%s/button/%s_rescan_sensors/config",
+             CONFIG_HA_DISCOVERY_PREFIX, CONFIG_MQTT_BASE_TOPIC);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "name", "Rescan Sensors");
+
+    char unique_id[64];
+    snprintf(unique_id, sizeof(unique_id), "%s_rescan_sensors", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "unique_id", unique_id);
+    cJSON_AddStringToObject(root, "object_id", unique_id);
+
+    char command_topic[128];
+    snprintf(command_topic, sizeof(command_topic), "%s/rescan/trigger", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "command_topic", command_topic);
+    cJSON_AddStringToObject(root, "payload_press", "trigger");
+    cJSON_AddStringToObject(root, "icon", "mdi:magnify-scan");
+    cJSON_AddStringToObject(root, "entity_category", "config");
+
+    char availability_topic[128];
+    snprintf(availability_topic, sizeof(availability_topic), "%s/status", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "availability_topic", availability_topic);
+    cJSON_AddStringToObject(root, "payload_available", "online");
+    cJSON_AddStringToObject(root, "payload_not_available", "offline");
+
+    cJSON_AddItemToObject(root, "device", create_device_info());
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    if (payload == NULL) {
+        ESP_LOGE(TAG, "Failed to create rescan button discovery payload");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int msg_id = esp_mqtt_client_publish(s_mqtt_client, discovery_topic, payload, 0, 1, 1);
+    free(payload);
+
+    if (msg_id < 0) {
+        ESP_LOGE(TAG, "Failed to publish rescan button discovery");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGD(TAG, "Registered rescan sensors button with HA");
     return ESP_OK;
 #else
     return ESP_OK;
