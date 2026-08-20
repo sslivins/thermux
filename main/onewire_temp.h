@@ -25,6 +25,13 @@ typedef struct {
     bool genuine;                         /**< True if the sensor's ROM/scratchpad pattern
                                                 matches a genuine Maxim/Analog Devices DS18B20.
                                                 False indicates a likely clone/counterfeit chip. */
+    bool genuine_check_ok;                /**< True if the genuineness check was able to read/verify
+                                                the scratchpad (bus + CRC ok). False means the check
+                                                could not be completed and "genuine" defaulted to true. */
+    uint8_t count_remain;                  /**< Raw scratchpad byte 6 (COUNT_REMAIN), used in the
+                                                genuineness check. Only valid if genuine_check_ok. */
+    uint8_t count_per_c;                   /**< Raw scratchpad byte 7 (COUNT_PER_C), used in the
+                                                genuineness check. Only valid if genuine_check_ok. */
 } onewire_sensor_t;
 
 typedef struct {
