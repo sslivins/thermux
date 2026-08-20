@@ -39,10 +39,10 @@ static portMUX_TYPE s_stats_lock = portMUX_INITIALIZER_UNLOCKED;
 /*
  * Genuine-chip detection.
  *
- * Most "knock-off"/counterfeit DS18B20 sensors sold on ebay/AliExpress are
- * clones that don't fully replicate the internal behavior of the authentic
- * Maxim/Analog Devices part. This is a best-effort heuristic (not a
- * guarantee) based on the two checks popularized by Chris Petrich's
+ * Most "knock-off"/counterfeit DS18B20 sensors sold on ebay/AliExpress/Amazon
+ * are clones that don't fully replicate the internal behavior of the
+ * authentic Maxim/Analog Devices part. This is a best-effort heuristic (not
+ * a guarantee) based on checks documented in Chris Petrich's
  * "counterfeit_DS18B20" project (https://github.com/cpetrich/counterfeit_DS18B20):
  *
  *   1. ROM pattern: genuine parts follow 28-xx-xx-xx-xx-00-00-xx, i.e. the
@@ -52,23 +52,89 @@ static portMUX_TYPE s_stats_lock = portMUX_INITIALIZER_UNLOCKED;
  *      COUNT_PER_C is always 0x10 and COUNT_REMAIN never exceeds it. Many
  *      clones leave these bytes fixed at the wrong value or violate that
  *      relationship.
+ *   3. 12-bit conversion time: the time a chip actually takes to complete a
+ *      12-bit temperature conversion is a reproducible side-channel that's
+ *      characteristic of the underlying silicon and hard for a clone to
+ *      fake without copying Maxim's exact die design. Authentic parts
+ *      (Family A1) consistently take ~580-615ms. Many clone families are
+ *      dramatically faster (as low as ~11ms for Family D1, ~28-30ms for
+ *      Family C, etc.) because they don't replicate the original's slow
+ *      ADC/analog design. A sensor converting in under ~400ms cannot be an
+ *      authentic part, even if it fakes the ROM pattern/scratchpad bytes.
+ *      This check is only meaningful when the sensor is in 12-bit
+ *      resolution mode, since conversion time scales with resolution.
  *
- * A sensor failing either check is flagged as "not genuine" so the UI can
+ * A sensor failing any check is flagged as "not genuine" so the UI can
  * surface a non-blocking notice. This never prevents the sensor from being
  * used - it's purely informational.
  *
- * The raw COUNT_REMAIN/COUNT_PER_C bytes (and whether the scratchpad read
- * itself succeeded) are written back to the sensor struct so they can be
- * inspected remotely via /api/sensors, since some clone families forge the
- * ROM pattern too and it's useful to see the actual scratchpad values
- * rather than just a pass/fail bool.
+ * The raw COUNT_REMAIN/COUNT_PER_C bytes and measured conversion time (and
+ * whether each check was able to complete) are written back to the sensor
+ * struct so they can be inspected remotely via /api/sensors, since some
+ * clone families forge the ROM pattern and scratchpad too, and a plain
+ * pass/fail bool isn't enough to diagnose what's actually happening on a
+ * sensor that "shouldn't" be genuine.
  */
+
+/** Below this conversion time (ms), a 12-bit reading cannot be from an
+ *  authentic DS18B20 (which take ~580-615ms per Petrich's measurements).
+ *  Set comfortably below the authentic range to avoid false positives from
+ *  minor timing jitter. */
+#define DS18B20_MIN_GENUINE_CONVERSION_MS 400
+/** Generous upper bound in case a sensor's busy line never comes back;
+ *  avoids hanging the scan loop indefinitely on a misbehaving device. */
+#define DS18B20_MAX_CONVERSION_WAIT_MS 1000
+
+/**
+ * @brief Measure how long a 12-bit temperature conversion actually takes.
+ *
+ * Issues Match ROM + Convert T, then polls the bus (a genuine/most clone
+ * DS18B20 pulls the line low while busy and releases it to high once the
+ * conversion completes) until it goes high or DS18B20_MAX_CONVERSION_WAIT_MS
+ * elapses. Assumes the device is in external-power mode (not parasitic),
+ * which is the case for all sensors driven by this project's driver.
+ *
+ * @return Measured time in milliseconds, or -1 if the measurement couldn't
+ *         be completed (bus error, or busy line never released).
+ */
+static int ds18b20_measure_conversion_time_ms(const uint8_t *address)
+{
+    uint8_t tx_buffer[10];
+    tx_buffer[0] = ONEWIRE_CMD_MATCH_ROM;
+    memcpy(&tx_buffer[1], address, ONEWIRE_ROM_SIZE);
+    tx_buffer[9] = DS18B20_CMD_CONVERT;
+
+    if (onewire_bus_reset(s_bus_handle) != ESP_OK) {
+        return -1;
+    }
+    if (onewire_bus_write_bytes(s_bus_handle, tx_buffer, sizeof(tx_buffer)) != ESP_OK) {
+        return -1;
+    }
+
+    int64_t start_us = esp_timer_get_time();
+    int64_t deadline_us = start_us + (int64_t)DS18B20_MAX_CONVERSION_WAIT_MS * 1000;
+    while (esp_timer_get_time() < deadline_us) {
+        uint8_t bit = 0;
+        if (onewire_bus_read_bit(s_bus_handle, &bit) != ESP_OK) {
+            return -1;
+        }
+        if (bit) {
+            /* Conversion complete */
+            return (int)((esp_timer_get_time() - start_us) / 1000);
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    return -1;  /* Never completed within the wait window */
+}
+
 static bool ds18b20_check_genuine(const uint8_t *address, bool *check_ok,
-                                   uint8_t *count_remain_out, uint8_t *count_per_c_out)
+                                   uint8_t *count_remain_out, uint8_t *count_per_c_out,
+                                   int *conversion_time_ms_out)
 {
     *check_ok = false;
     *count_remain_out = 0;
     *count_per_c_out = 0;
+    *conversion_time_ms_out = -1;
 
     /* Check 1: ROM pattern 28-xx-xx-xx-xx-00-00-xx */
     if (address[5] != 0x00 || address[6] != 0x00) {
@@ -98,6 +164,7 @@ static bool ds18b20_check_genuine(const uint8_t *address, bool *check_ok,
         return true;
     }
 
+
     *check_ok = true;
     uint8_t count_remain = scratchpad[6];
     uint8_t count_per_c = scratchpad[7];
@@ -105,6 +172,16 @@ static bool ds18b20_check_genuine(const uint8_t *address, bool *check_ok,
     *count_per_c_out = count_per_c;
     if (count_per_c != 0x10 || count_remain > count_per_c) {
         return false;
+    }
+
+    /* Check 3: 12-bit conversion timing side-channel. Only meaningful when
+     * running at 12-bit resolution, since conversion time scales with it. */
+    if (s_resolution == 12) {
+        int conv_ms = ds18b20_measure_conversion_time_ms(address);
+        *conversion_time_ms_out = conv_ms;
+        if (conv_ms >= 0 && conv_ms < DS18B20_MIN_GENUINE_CONVERSION_MS) {
+            return false;
+        }
     }
 
     return true;
@@ -206,7 +283,8 @@ esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *fou
         sensors[count].genuine = ds18b20_check_genuine(sensors[count].address,
                                                          &sensors[count].genuine_check_ok,
                                                          &sensors[count].count_remain,
-                                                         &sensors[count].count_per_c);
+                                                         &sensors[count].count_per_c,
+                                                         &sensors[count].conversion_time_ms);
 
         /* Create DS18B20 device handle */
         ds18b20_config_t ds18b20_config = {};
@@ -230,6 +308,13 @@ esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *fou
         } else {
             ESP_LOGD(TAG, "Sensor %s scratchpad: COUNT_REMAIN=0x%02X COUNT_PER_C=0x%02X",
                      addr_str, sensors[count].count_remain, sensors[count].count_per_c);
+        }
+        if (sensors[count].conversion_time_ms >= 0) {
+            ESP_LOGD(TAG, "Sensor %s 12-bit conversion time: %dms", addr_str, sensors[count].conversion_time_ms);
+            if (sensors[count].conversion_time_ms < DS18B20_MIN_GENUINE_CONVERSION_MS) {
+                ESP_LOGW(TAG, "Sensor %s converted in %dms, too fast for a genuine DS18B20 (likely a clone)",
+                         addr_str, sensors[count].conversion_time_ms);
+            }
         }
 
         count++;

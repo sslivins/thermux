@@ -400,6 +400,7 @@ static esp_err_t api_sensors_get_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(sensor, "genuine_check_ok", sensors[i].hw_sensor.genuine_check_ok);
         cJSON_AddNumberToObject(sensor, "count_remain", sensors[i].hw_sensor.count_remain);
         cJSON_AddNumberToObject(sensor, "count_per_c", sensors[i].hw_sensor.count_per_c);
+        cJSON_AddNumberToObject(sensor, "conversion_time_ms", sensors[i].hw_sensor.conversion_time_ms);
         
         cJSON_AddItemToArray(root, sensor);
     }
