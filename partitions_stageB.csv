@@ -1,14 +1,19 @@
-# Stage B target layout - migration test only (see issue #48 / experiment/partition-migration-test)
+# Stage B / final layout - migration test only (see issue #48 / experiment/partition-migration-test)
 #
-# Final layout: ota_0 and ota_1 equal size (~1952 KB each), no factory.
-# Applied while running from the Stage A ota_0 (which spans 0x20000-0x2C0000);
-# this table shrinks ota_0 back down and grows ota_1 to match, writing the
-# new image only into the ota_1 region (untouched by the running Stage A image).
+# Final layout: ota_0 and ota_1 equal size, no factory. Applied while running
+# from the Stage A ota_0 (which spans 0x20000-0x2C0000); this table shrinks
+# ota_0 back down and grows ota_1 to match, writing the new image only into
+# the ota_1 region (untouched by the running Stage A image).
+#
+# 0x1E0000 (1920 KB) per slot keeps both offsets 0x10000-aligned (a hard
+# gen_esp32part.py requirement for app partitions): 0x20000 + 0x1E0000 =
+# 0x200000 (aligned), and 0x200000 + 0x1E0000 = 0x3E0000, comfortably below
+# the untouched storage partition at 0x3F0000.
 #
 # Name,   Type, SubType, Offset,   Size,     Flags
 nvs,      data, nvs,     0x9000,   0x6000,
 otadata,  data, ota,     0xf000,   0x2000,
 phy_init, data, phy,     0x11000,  0x1000,
-ota_0,    app,  ota_0,   0x20000,  0x1E8000,
-ota_1,    app,  ota_1,   0x208000, 0x1E8000,
+ota_0,    app,  ota_0,   0x20000,  0x1E0000,
+ota_1,    app,  ota_1,   0x200000, 0x1E0000,
 storage,  data, nvs,     0x3F0000, 0x10000,

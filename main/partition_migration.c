@@ -64,9 +64,9 @@ static const char *TAG = "part_migration";
 
 /* Stage B / final layout constants (see partitions_stageB.csv) */
 #define STAGEB_OTA0_ADDR        0x20000
-#define STAGEB_OTA0_SIZE        0x1E8000
-#define STAGEB_OTA1_ADDR        0x208000
-#define STAGEB_OTA1_SIZE        0x1E8000
+#define STAGEB_OTA0_SIZE        0x1E0000
+#define STAGEB_OTA1_ADDR        0x200000
+#define STAGEB_OTA1_SIZE        0x1E0000
 
 #define PARTITION_TABLE_ADDR    0x8000
 #define PARTITION_TABLE_SIZE    0x1000
