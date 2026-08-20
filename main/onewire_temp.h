@@ -32,6 +32,9 @@ typedef struct {
                                                 genuineness check. Only valid if genuine_check_ok. */
     uint8_t count_per_c;                   /**< Raw scratchpad byte 7 (COUNT_PER_C), used in the
                                                 genuineness check. Only valid if genuine_check_ok. */
+    int conversion_time_ms;                /**< Measured 12-bit conversion time in milliseconds, used
+                                                as a side-channel genuineness signal. -1 if not measured
+                                                (e.g. sensor not in 12-bit mode, or bus error). */
 } onewire_sensor_t;
 
 typedef struct {
