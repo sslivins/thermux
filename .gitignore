@@ -8,3 +8,9 @@ main/html_gz/
 # Python
 __pycache__/
 *.pyc
+
+# Web UI test tooling (main/html/package.json)
+main/html/node_modules/
+main/html/test-results/
+main/html/playwright-report/
+main/html/.playwright-mcp/
