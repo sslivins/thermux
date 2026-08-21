@@ -44,3 +44,17 @@ jobs:
           esp_idf_version: v5.5.2
           target: esp32
           path: '.'
+
+      # TEMPORARY: upload build artifacts for manual OTA testing of the
+      # partition migration experiment. Remove before merging/closing
+      # experiment/partition-migration-test.
+      - name: Upload firmware artifacts (temp, migration testing)
+        if: github.ref == 'refs/heads/experiment/partition-migration-test'
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-test-firmware
+          path: |
+            build/thermux.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+          retention-days: 7
