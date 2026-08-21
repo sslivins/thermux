@@ -222,7 +222,7 @@ Binary files will be in `build/`:
 
 ## Flash Memory Layout
 
-The Thermux firmware uses the following partition layout:
+The Thermux firmware uses the following partition layout (as of v2.10.13 and later):
 
 | Partition | Type | Address | Size | Purpose |
 |-----------|------|---------|------|---------|
@@ -231,12 +231,17 @@ The Thermux firmware uses the following partition layout:
 | NVS | data | 0x9000 | 24KB | Configuration storage (WiFi, MQTT, etc.) |
 | OTA Data | data | 0xf000 | 8KB | OTA update state |
 | phy_init | data | 0x11000 | 4KB | WiFi PHY calibration data |
-| Factory | app | 0x20000 | 1.4MB | Main application (initial install) |
-| OTA_0 | app | 0x190000 | 1.2MB | OTA update slot 0 |
-| OTA_1 | app | 0x2C0000 | 1.2MB | OTA update slot 1 |
+| OTA_0 | app | 0x20000 | 1.875MB | OTA update slot 0 |
+| OTA_1 | app | 0x200000 | 1.875MB | OTA update slot 1 |
 | Storage | data | 0x3F0000 | 64KB | Additional NVS storage |
 
-After the first OTA update, the device will boot from either OTA_0 or OTA_1 (whichever has the newest firmware), not from Factory.
+A brand-new device has no factory partition; the bootloader defaults to booting `OTA_0` when `otadata` is blank (all-0xFF), so an initial flash of `thermux.bin` at `0x20000` boots normally on first power-up. Once OTA updates begin, the device boots from whichever of `OTA_0`/`OTA_1` has the newest firmware.
+
+### Partition layout history
+
+Prior to v2.10.13, the layout used a separate `factory` partition (0x20000, 1.4MB) plus two smaller 1.2MB OTA slots (`OTA_0` at 0x190000, `OTA_1` at 0x2C0000). The `factory` slot was only ever used for the initial flash and was permanently wasted space afterward (a device never boots back into `factory` once an OTA update lands in `OTA_0`/`OTA_1`).
+
+Existing field devices flashed before this change were migrated to the new layout entirely over-the-air (no reflash required), reclaiming the dead `factory` space and growing both OTA slots to 1.875MB each. See [issue #48](https://github.com/sslivins/thermux/issues/48) for the full migration design and validation history. This was a one-time, in-place migration; it does not need to be repeated and does not apply to devices already running v2.10.13+.
 
 ## Security Notes
 
