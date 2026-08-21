@@ -1079,6 +1079,28 @@
             } catch (err) { showToast('Factory reset initiated'); }
         }
 
+        /* Pure helper: builds the /api/backup query string from checkbox
+           states. Extracted so it can be unit tested without a DOM/browser. */
+        function buildBackupQuery(includeMqtt, includeWifi, includeAuth) {
+            const b = (v) => (v ? 1 : 0);
+            return `mqtt=${b(includeMqtt)}&wifi=${b(includeWifi)}&auth=${b(includeAuth)}`;
+        }
+
+        /* Pure helper: derives the restore file-input label/button state from
+           the selected File (or null if cleared). Extracted so it can be unit
+           tested without a DOM/browser. */
+        function restoreFileLabelState(file) {
+            if (file) {
+                return { text: '📄 ' + file.name, hasFile: true, disabled: false };
+            }
+            return { text: '📄 Choose backup file...', hasFile: false, disabled: true };
+        }
+
+        /* istanbul ignore next -- exposed only for Node test harness, no-op in browser */
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = { buildBackupQuery, restoreFileLabelState };
+        }
+
         function openBackupModal() {
             document.getElementById('backup-modal-overlay').style.display = 'flex';
         }
@@ -1088,12 +1110,12 @@
         }
 
         async function downloadBackup() {
-            const mqtt = document.getElementById('backup-include-mqtt').checked ? 1 : 0;
-            const wifi = document.getElementById('backup-include-wifi').checked ? 1 : 0;
-            const auth = document.getElementById('backup-include-auth').checked ? 1 : 0;
+            const includeMqtt = document.getElementById('backup-include-mqtt').checked;
+            const includeWifi = document.getElementById('backup-include-wifi').checked;
+            const includeAuth = document.getElementById('backup-include-auth').checked;
             closeBackupModal();
             try {
-                const resp = await fetch(`/api/backup?mqtt=${mqtt}&wifi=${wifi}&auth=${auth}`);
+                const resp = await fetch(`/api/backup?${buildBackupQuery(includeMqtt, includeWifi, includeAuth)}`);
                 if (checkAuthError(resp)) return;
                 if (!resp.ok) { showToast('Backup failed', true); return; }
                 const blob = await resp.blob();
@@ -1117,15 +1139,10 @@
             restoreFile = event.target.files[0] || null;
             const label = document.getElementById('restore-file-label');
             const btn = document.getElementById('restore-btn');
-            if (restoreFile) {
-                label.textContent = '📄 ' + restoreFile.name;
-                label.classList.add('has-file');
-                btn.disabled = false;
-            } else {
-                label.textContent = '📄 Choose backup file...';
-                label.classList.remove('has-file');
-                btn.disabled = true;
-            }
+            const state = restoreFileLabelState(restoreFile);
+            label.textContent = state.text;
+            label.classList.toggle('has-file', state.hasFile);
+            btn.disabled = state.disabled;
         }
 
         async function restoreBackup() {
