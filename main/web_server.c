@@ -334,7 +334,20 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "max_sensors", CONFIG_MAX_SENSORS);
     cJSON_AddNumberToObject(root, "uptime_seconds", esp_timer_get_time() / 1000000);
     cJSON_AddNumberToObject(root, "free_heap", esp_get_free_heap_size());
-    
+
+    /* Running partition info - needed to verify partition migration state
+     * over the network (no USB/serial access on field devices). */
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    if (running != NULL) {
+        cJSON *partition = cJSON_CreateObject();
+        cJSON_AddStringToObject(partition, "label", running->label);
+        char addr_str[16];
+        snprintf(addr_str, sizeof(addr_str), "0x%lx", (unsigned long)running->address);
+        cJSON_AddStringToObject(partition, "address", addr_str);
+        cJSON_AddNumberToObject(partition, "size", running->size);
+        cJSON_AddItemToObject(root, "running_partition", partition);
+    }
+
     extern bool mqtt_ha_is_connected(void);
     cJSON_AddBoolToObject(root, "mqtt_connected", mqtt_ha_is_connected());
     
