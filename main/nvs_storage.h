@@ -41,6 +41,33 @@ esp_err_t nvs_storage_load_sensor_name(const uint8_t *sensor_address, char *frie
 esp_err_t nvs_storage_delete_sensor_name(const uint8_t *sensor_address);
 
 /**
+ * @brief Callback invoked once per saved sensor name during enumeration
+ * @param serial_hex 12-char hex string identifying the sensor (ROM bytes 1-6,
+ *                   i.e. the internal NVS key without the "s_" prefix)
+ * @param friendly_name The saved friendly name
+ * @param ctx Opaque context pointer passed through from the caller
+ */
+typedef void (*nvs_storage_sensor_name_cb_t)(const char *serial_hex, const char *friendly_name, void *ctx);
+
+/**
+ * @brief Enumerate all saved sensor friendly names, including ones for
+ * sensors that are not currently connected/detected. Used for backup export.
+ * @param cb Callback invoked once per saved name
+ * @param ctx Opaque context pointer passed through to the callback
+ */
+esp_err_t nvs_storage_enumerate_sensor_names(nvs_storage_sensor_name_cb_t cb, void *ctx);
+
+/**
+ * @brief Save a sensor friendly name directly by its serial key (as returned
+ * by nvs_storage_enumerate_sensor_names), bypassing the need for the raw
+ * 8-byte ROM address. Used to restore names for sensors that may not be
+ * currently connected.
+ * @param serial_hex 12-char hex string identifying the sensor (ROM bytes 1-6)
+ * @param friendly_name Friendly name string (max 32 chars)
+ */
+esp_err_t nvs_storage_save_sensor_name_by_serial(const char *serial_hex, const char *friendly_name);
+
+/**
  * @brief Save MQTT configuration
  */
 esp_err_t nvs_storage_save_mqtt_config(const char *broker_uri, const char *username, const char *password);

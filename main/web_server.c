@@ -1430,6 +1430,242 @@ static esp_err_t api_system_factory_reset_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/**
+ * @brief cJSON array callback for backup export - appends one sensor name entry
+ */
+static void backup_sensor_name_cb(const char *serial_hex, const char *friendly_name, void *ctx)
+{
+    cJSON *array = (cJSON *)ctx;
+    cJSON *entry = cJSON_CreateObject();
+    cJSON_AddStringToObject(entry, "serial", serial_hex);
+    cJSON_AddStringToObject(entry, "name", friendly_name);
+    cJSON_AddItemToArray(array, entry);
+}
+
+/**
+ * @brief Handler for GET /api/backup
+ * Query params: mqtt=1, wifi=1, auth=1 to include those sections (default excluded)
+ */
+static esp_err_t api_backup_get_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+
+    bool include_mqtt = false, include_wifi = false, include_auth = false;
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    if (qlen > 1) {
+        char *qbuf = malloc(qlen);
+        if (qbuf != NULL && httpd_req_get_url_query_str(req, qbuf, qlen) == ESP_OK) {
+            char val[4];
+            if (httpd_query_key_value(qbuf, "mqtt", val, sizeof(val)) == ESP_OK) {
+                include_mqtt = (strcmp(val, "1") == 0);
+            }
+            if (httpd_query_key_value(qbuf, "wifi", val, sizeof(val)) == ESP_OK) {
+                include_wifi = (strcmp(val, "1") == 0);
+            }
+            if (httpd_query_key_value(qbuf, "auth", val, sizeof(val)) == ESP_OK) {
+                include_auth = (strcmp(val, "1") == 0);
+            }
+        }
+        free(qbuf);
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "schema_version", 1);
+    cJSON_AddStringToObject(root, "device_version", APP_VERSION);
+
+    cJSON *names = cJSON_CreateArray();
+    nvs_storage_enumerate_sensor_names(backup_sensor_name_cb, names);
+    cJSON_AddItemToObject(root, "sensor_names", names);
+
+    uint32_t read_interval = get_sensor_read_interval();
+    uint32_t publish_interval = get_sensor_publish_interval();
+    uint8_t resolution = onewire_temp_get_resolution();
+    /* Prefer NVS-saved values (what a restore would actually apply); fall
+     * back to current runtime values if nothing has been saved yet */
+    nvs_storage_load_sensor_settings(&read_interval, &publish_interval, &resolution);
+
+    cJSON *settings = cJSON_CreateObject();
+    cJSON_AddNumberToObject(settings, "read_interval_ms", read_interval);
+    cJSON_AddNumberToObject(settings, "publish_interval_ms", publish_interval);
+    cJSON_AddNumberToObject(settings, "resolution", resolution);
+    cJSON_AddItemToObject(root, "sensor_settings", settings);
+
+    if (include_mqtt) {
+        char uri[128] = "", user[64] = "", pass[64] = "";
+        nvs_storage_load_mqtt_config(uri, sizeof(uri), user, sizeof(user), pass, sizeof(pass));
+        cJSON *mqtt = cJSON_CreateObject();
+        cJSON_AddStringToObject(mqtt, "broker_uri", uri);
+        cJSON_AddStringToObject(mqtt, "username", user);
+        cJSON_AddStringToObject(mqtt, "password", pass);
+        cJSON_AddItemToObject(root, "mqtt", mqtt);
+    }
+
+    if (include_wifi) {
+        char ssid[64] = "", pass[64] = "";
+        nvs_storage_load_wifi_config(ssid, sizeof(ssid), pass, sizeof(pass));
+        cJSON *wifi = cJSON_CreateObject();
+        cJSON_AddStringToObject(wifi, "ssid", ssid);
+        cJSON_AddStringToObject(wifi, "password", pass);
+        cJSON_AddItemToObject(root, "wifi", wifi);
+    }
+
+    if (include_auth) {
+        bool enabled = false;
+        char user[32] = "", pass[64] = "", api_key[64] = "";
+        nvs_storage_load_auth_config(&enabled, user, sizeof(user), pass, sizeof(pass), api_key, sizeof(api_key));
+        cJSON *auth = cJSON_CreateObject();
+        cJSON_AddBoolToObject(auth, "enabled", enabled);
+        cJSON_AddStringToObject(auth, "username", user);
+        cJSON_AddStringToObject(auth, "password", pass);
+        cJSON_AddStringToObject(auth, "api_key", api_key);
+        cJSON_AddItemToObject(root, "auth", auth);
+    }
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"thermux-backup.json\"");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/backup/restore
+ * Accepts a JSON backup (as produced by GET /api/backup), applies any
+ * sections present, then restarts the device.
+ */
+static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+
+    if (req->content_len == 0 || req->content_len > 16384) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid backup size");
+        return ESP_FAIL;
+    }
+
+    char *content = malloc(req->content_len + 1);
+    if (content == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    size_t received = 0;
+    while (received < req->content_len) {
+        int ret = httpd_req_recv(req, content + received, req->content_len - received);
+        if (ret <= 0) {
+            free(content);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to read body");
+            return ESP_FAIL;
+        }
+        received += ret;
+    }
+    content[received] = '\0';
+
+    cJSON *root = cJSON_Parse(content);
+    free(content);
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    int names_restored = 0;
+    cJSON *names = cJSON_GetObjectItem(root, "sensor_names");
+    if (cJSON_IsArray(names)) {
+        cJSON *entry;
+        cJSON_ArrayForEach(entry, names) {
+            cJSON *serial = cJSON_GetObjectItem(entry, "serial");
+            cJSON *name = cJSON_GetObjectItem(entry, "name");
+            if (cJSON_IsString(serial) && cJSON_IsString(name) && strlen(serial->valuestring) == 12) {
+                if (nvs_storage_save_sensor_name_by_serial(serial->valuestring, name->valuestring) == ESP_OK) {
+                    names_restored++;
+                }
+            }
+        }
+    }
+
+    cJSON *settings = cJSON_GetObjectItem(root, "sensor_settings");
+    if (cJSON_IsObject(settings)) {
+        cJSON *ri = cJSON_GetObjectItem(settings, "read_interval_ms");
+        cJSON *pi = cJSON_GetObjectItem(settings, "publish_interval_ms");
+        cJSON *res = cJSON_GetObjectItem(settings, "resolution");
+        if (cJSON_IsNumber(ri) && cJSON_IsNumber(pi) && cJSON_IsNumber(res)) {
+            nvs_storage_save_sensor_settings((uint32_t)ri->valueint, (uint32_t)pi->valueint, (uint8_t)res->valueint);
+            set_sensor_read_interval((uint32_t)ri->valueint);
+            set_sensor_publish_interval((uint32_t)pi->valueint);
+            if (res->valueint >= 9 && res->valueint <= 12) {
+                onewire_temp_set_resolution((uint8_t)res->valueint);
+            }
+        }
+    }
+
+    bool mqtt_restored = false, wifi_restored = false, auth_restored = false;
+
+    cJSON *mqtt = cJSON_GetObjectItem(root, "mqtt");
+    if (cJSON_IsObject(mqtt)) {
+        cJSON *uri = cJSON_GetObjectItem(mqtt, "broker_uri");
+        cJSON *user = cJSON_GetObjectItem(mqtt, "username");
+        cJSON *pass = cJSON_GetObjectItem(mqtt, "password");
+        if (cJSON_IsString(uri)) {
+            nvs_storage_save_mqtt_config(uri->valuestring,
+                                          cJSON_IsString(user) ? user->valuestring : "",
+                                          cJSON_IsString(pass) ? pass->valuestring : "");
+            mqtt_restored = true;
+        }
+    }
+
+    cJSON *wifi = cJSON_GetObjectItem(root, "wifi");
+    if (cJSON_IsObject(wifi)) {
+        cJSON *ssid = cJSON_GetObjectItem(wifi, "ssid");
+        cJSON *pass = cJSON_GetObjectItem(wifi, "password");
+        if (cJSON_IsString(ssid)) {
+            nvs_storage_save_wifi_config(ssid->valuestring, cJSON_IsString(pass) ? pass->valuestring : "");
+            wifi_restored = true;
+        }
+    }
+
+    cJSON *auth = cJSON_GetObjectItem(root, "auth");
+    if (cJSON_IsObject(auth)) {
+        cJSON *enabled = cJSON_GetObjectItem(auth, "enabled");
+        cJSON *user = cJSON_GetObjectItem(auth, "username");
+        cJSON *pass = cJSON_GetObjectItem(auth, "password");
+        cJSON *api_key = cJSON_GetObjectItem(auth, "api_key");
+        nvs_storage_save_auth_config(cJSON_IsTrue(enabled),
+                                      cJSON_IsString(user) ? user->valuestring : "",
+                                      cJSON_IsString(pass) ? pass->valuestring : "",
+                                      cJSON_IsString(api_key) ? api_key->valuestring : "");
+        auth_restored = true;
+    }
+
+    cJSON_Delete(root);
+
+    ESP_LOGW(TAG, "Backup restored: %d sensor name(s), mqtt=%d wifi=%d auth=%d",
+             names_restored, mqtt_restored, wifi_restored, auth_restored);
+
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", true);
+    cJSON_AddNumberToObject(response, "sensor_names_restored", names_restored);
+    cJSON_AddBoolToObject(response, "mqtt_restored", mqtt_restored);
+    cJSON_AddBoolToObject(response, "wifi_restored", wifi_restored);
+    cJSON_AddBoolToObject(response, "auth_restored", auth_restored);
+    cJSON_AddStringToObject(response, "message", "Restore complete. Restarting...");
+
+    char *json = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+
+    /* Delay restart to allow response to be sent */
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+
+    return ESP_OK;
+}
+
 /* Login page HTML - embedded directly since it's small and special */
 static const char *login_html = 
 "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
@@ -1756,7 +1992,7 @@ esp_err_t web_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = CONFIG_WEB_SERVER_PORT;
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 32;  /* 28 endpoints + room for future */
+    config.max_uri_handlers = 40;  /* 34 endpoints + room for future */
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
@@ -1983,6 +2219,21 @@ esp_err_t web_server_start(void)
         .handler = api_system_factory_reset_handler,
     };
     REGISTER_URI(factory_reset_uri);
+
+    /* Backup / restore endpoints */
+    httpd_uri_t backup_get_uri = {
+        .uri = "/api/backup",
+        .method = HTTP_GET,
+        .handler = api_backup_get_handler,
+    };
+    REGISTER_URI(backup_get_uri);
+
+    httpd_uri_t backup_restore_uri = {
+        .uri = "/api/backup/restore",
+        .method = HTTP_POST,
+        .handler = api_backup_restore_post_handler,
+    };
+    REGISTER_URI(backup_restore_uri);
 
     /* Auth config endpoints */
     httpd_uri_t auth_config_get_uri = {
