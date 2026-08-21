@@ -15,6 +15,7 @@
 #include "onewire_crc.h"
 #include "ds18b20.h"
 #include <string.h>
+#include <stdio.h>
 
 static const char *TAG = "onewire_temp";
 

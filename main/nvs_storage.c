@@ -163,6 +163,69 @@ esp_err_t nvs_storage_delete_sensor_name(const uint8_t *sensor_address)
     return err;
 }
 
+esp_err_t nvs_storage_enumerate_sensor_names(nvs_storage_sensor_name_cb_t cb, void *ctx)
+{
+    if (cb == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_iterator_t it = NULL;
+    esp_err_t err = nvs_entry_find(NVS_DEFAULT_PART_NAME, NVS_NAMESPACE, NVS_TYPE_STR, &it);
+
+    while (err == ESP_OK) {
+        nvs_entry_info_t info;
+        nvs_entry_info(it, &info);
+
+        /* Only the new-format keys ("s_" + 12 hex chars = 14 chars total).
+         * Skip legacy 10-char keys ("s_" + 8 hex chars) - if one still
+         * lingers it will be migrated to the new format the next time that
+         * sensor's name is loaded (see nvs_storage_load_sensor_name), so it
+         * would otherwise show up as a stale duplicate here. */
+        if (strncmp(info.key, "s_", 2) == 0 && strlen(info.key) == 14) {
+            nvs_handle_t handle;
+            if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle) == ESP_OK) {
+                char value[MAX_FRIENDLY_NAME_LEN];
+                size_t len = sizeof(value);
+                if (nvs_get_str(handle, info.key, value, &len) == ESP_OK) {
+                    cb(info.key + 2, value, ctx);
+                }
+                nvs_close(handle);
+            }
+        }
+
+        err = nvs_entry_next(&it);
+    }
+    nvs_release_iterator(it);
+    return ESP_OK;
+}
+
+esp_err_t nvs_storage_save_sensor_name_by_serial(const char *serial_hex, const char *friendly_name)
+{
+    if (serial_hex == NULL || strlen(serial_hex) != 12) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char key[16];
+    snprintf(key, sizeof(key), "s_%s", serial_hex);
+
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = nvs_set_str(handle, key, friendly_name);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    } else {
+        ESP_LOGE(TAG, "Failed to save sensor name by serial: %s", esp_err_to_name(err));
+    }
+    nvs_close(handle);
+
+    return err;
+}
+
 esp_err_t nvs_storage_save_mqtt_config(const char *broker_uri, const char *username, const char *password)
 {
     nvs_handle_t handle;
