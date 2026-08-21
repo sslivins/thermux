@@ -1,0 +1,14 @@
+{
+  "name": "thermux-web-ui-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Test tooling for the Thermux embedded web UI (main/html/index.html, main/html/config.html). No build step/bundler - these are static files served as-is by the firmware; this package only exists to hold devDependencies for testing them.",
+  "scripts": {
+    "test:unit": "node --test test/*.test.js",
+    "test:e2e": "playwright test",
+    "test": "npm run test:unit && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}
