@@ -45,6 +45,29 @@ jobs:
           target: esp32
           path: '.'
 
+      # TEMPORARY: decode a captured crash backtrace from hardware testing
+      # of the partition migration experiment, using the ESP-IDF toolchain
+      # (xtensa-esp32-elf-addr2line) via the official IDF docker image so we
+      # don't need a local toolchain. Set CRASH_BACKTRACE below to the
+      # space-separated list of "0xADDR:0xSP" pairs from the serial log's
+      # "Backtrace:" line, PC first. Remove this step once the migration
+      # experiment is done.
+      - name: Decode crash backtrace (temp, migration debugging)
+        if: github.head_ref == 'experiment/partition-migration-test' || github.ref == 'refs/heads/experiment/partition-migration-test'
+        env:
+          CRASH_PC: "0x400955e1"
+          CRASH_BACKTRACE: "0x40088f49 0x40088f11 0x400900ee 0x400955e1 0x400dff64 0x400dffff 0x400dd207 0x40119f7a 0x40118cc6 0x40119390 0x40117a18 0x40183f36 0x40117cdf"
+        run: |
+          docker run --rm -v "$PWD:/proj" -w /proj espressif/idf:v5.5.2 bash -c '
+            . $IDF_PATH/export.sh > /dev/null 2>&1
+            echo "=== Crash PC ==="
+            xtensa-esp32-elf-addr2line -pfiaC -e build/thermux.elf '"$CRASH_PC"'
+            echo "=== Full backtrace ==="
+            for addr in '"$CRASH_BACKTRACE"'; do
+              xtensa-esp32-elf-addr2line -pfiaC -e build/thermux.elf "$addr"
+            done
+          '
+
       # TEMPORARY: upload build artifacts for manual OTA testing of the
       # partition migration experiment. Remove before merging/closing
       # experiment/partition-migration-test.
