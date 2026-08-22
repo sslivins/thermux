@@ -1394,8 +1394,8 @@ static uint32_t compute_safe_min_read_interval_ms(void)
     if (buffered_ms < estimated_ms + 200) {
         buffered_ms = estimated_ms + 200;
     }
-    if (buffered_ms < 1000) {
-        buffered_ms = 1000; /* keep in step with the existing 1s floor */
+    if (buffered_ms < 5000) {
+        buffered_ms = 5000; /* keep in step with the 5s hard floor */
     }
     return buffered_ms;
 }
@@ -1464,7 +1464,7 @@ static esp_err_t api_config_sensor_post_handler(httpd_req_t *req)
 
     if (cJSON_IsNumber(read_item)) {
         read_interval = (uint32_t)read_item->valueint;
-        if (read_interval < 1000) read_interval = 1000;
+        if (read_interval < 5000) read_interval = 5000;
         if (read_interval > 300000) read_interval = 300000;
         if (read_interval < min_safe_read_interval_ms) {
             read_interval = min_safe_read_interval_ms;
@@ -1733,7 +1733,7 @@ static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
             }
 
             uint32_t read_interval = (uint32_t)ri->valueint;
-            if (read_interval < 1000) read_interval = 1000;
+            if (read_interval < 5000) read_interval = 5000;
             if (read_interval > 300000) read_interval = 300000;
             uint32_t min_safe_read_interval_ms = compute_safe_min_read_interval_ms();
             if (read_interval < min_safe_read_interval_ms) {

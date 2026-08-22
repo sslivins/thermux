@@ -14,8 +14,8 @@ void test_config_read_interval_valid(void)
     uint32_t clamped;
     
     /* Valid values */
-    TEST_ASSERT_EQUAL_INT(CONFIG_VALID, config_validate_read_interval(1000, &clamped));
-    TEST_ASSERT_EQUAL_INT(1000, clamped);
+    TEST_ASSERT_EQUAL_INT(CONFIG_VALID, config_validate_read_interval(5000, &clamped));
+    TEST_ASSERT_EQUAL_INT(5000, clamped);
     
     TEST_ASSERT_EQUAL_INT(CONFIG_VALID, config_validate_read_interval(10000, &clamped));
     TEST_ASSERT_EQUAL_INT(10000, clamped);
@@ -29,13 +29,13 @@ void test_config_read_interval_too_low(void)
     uint32_t clamped;
     
     TEST_ASSERT_EQUAL_INT(CONFIG_ERR_TOO_LOW, config_validate_read_interval(0, &clamped));
-    TEST_ASSERT_EQUAL_INT(1000, clamped);  /* Clamped to min */
+    TEST_ASSERT_EQUAL_INT(5000, clamped);  /* Clamped to min */
     
     TEST_ASSERT_EQUAL_INT(CONFIG_ERR_TOO_LOW, config_validate_read_interval(500, &clamped));
-    TEST_ASSERT_EQUAL_INT(1000, clamped);
+    TEST_ASSERT_EQUAL_INT(5000, clamped);
     
-    TEST_ASSERT_EQUAL_INT(CONFIG_ERR_TOO_LOW, config_validate_read_interval(999, &clamped));
-    TEST_ASSERT_EQUAL_INT(1000, clamped);
+    TEST_ASSERT_EQUAL_INT(CONFIG_ERR_TOO_LOW, config_validate_read_interval(4999, &clamped));
+    TEST_ASSERT_EQUAL_INT(5000, clamped);
 }
 
 void test_config_read_interval_too_high(void)

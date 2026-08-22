@@ -9,7 +9,7 @@
 #include <stdint.h>
 
 /* Configuration limits */
-#define CONFIG_READ_INTERVAL_MIN_MS     1000      /* 1 second */
+#define CONFIG_READ_INTERVAL_MIN_MS     5000      /* 5 seconds */
 #define CONFIG_READ_INTERVAL_MAX_MS     300000    /* 5 minutes */
 #define CONFIG_PUBLISH_INTERVAL_MIN_MS  5000      /* 5 seconds */
 #define CONFIG_PUBLISH_INTERVAL_MAX_MS  600000    /* 10 minutes */
