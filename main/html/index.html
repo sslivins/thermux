@@ -93,6 +93,14 @@
             background: rgba(245, 158, 11, 0.15);
             animation: pulse 1s ease-in-out;
         }
+        /* Empty-state message (no sensors found / no search matches): span
+           the full grid width and center the text, instead of sitting
+           left-aligned in the grid's first column like a real sensor card. */
+        .sensor-card.empty-state {
+            grid-column: 1 / -1;
+            text-align: center;
+            color: #ccc;
+        }
         .sensor-card.changed-major {
             border-color: #ef4444;
             background: rgba(239, 68, 68, 0.2);
@@ -442,7 +450,7 @@
         function renderSensors() {
             const grid = document.getElementById('sensors-grid');
             if (sensors.length === 0) {
-                grid.innerHTML = '<div class="sensor-card">No sensors found. Click "Rescan Sensors" to detect connected sensors.</div>';
+                grid.innerHTML = '<div class="sensor-card empty-state">No sensors found. Click "Rescan Sensors" to detect connected sensors.</div>';
                 return;
             }
             
@@ -485,7 +493,7 @@
 
             if (sortedSensors.length === 0) {
                 const safe = filterText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                grid.innerHTML = '<div class="sensor-card">No sensors match &quot;' + safe + '&quot;.</div>';
+                grid.innerHTML = '<div class="sensor-card empty-state">No sensors match &quot;' + safe + '&quot;.</div>';
                 return;
             }
 
