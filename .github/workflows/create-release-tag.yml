@@ -32,6 +32,11 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
           echo "📦 Found version: $VERSION (tag: v$VERSION)"
 
       - name: Check if tag already exists
@@ -118,5 +123,6 @@ jobs:
             build/partition_table/partition-table.bin
             build/thermux.bin
           generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.prerelease }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

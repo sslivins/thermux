@@ -18,6 +18,33 @@
         .back-link { text-align: center; margin-bottom: 30px; }
         .back-link a { color: #60a5fa; text-decoration: none; }
         .back-link a:hover { text-decoration: underline; }
+        .quick-nav {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: center;
+            margin-bottom: 25px;
+            padding: 12px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .quick-nav a {
+            color: #ccc;
+            text-decoration: none;
+            font-size: 0.85em;
+            padding: 6px 12px;
+            border-radius: 20px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.1);
+            white-space: nowrap;
+            transition: background 0.15s, color 0.15s;
+        }
+        .quick-nav a:hover {
+            color: #fff;
+            background: rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.4);
+        }
         .config-section {
             background: rgba(255,255,255,0.05);
             border-radius: 15px;
@@ -207,7 +234,18 @@
         <h1>⚙️ Settings</h1>
         <div class="back-link"><a href="/">← Back to Dashboard</a></div>
 
-        <div class="config-section">
+        <nav class="quick-nav" id="quick-nav">
+            <a href="#panel-network">🌐 Network</a>
+            <a href="#panel-mqtt">🔗 MQTT</a>
+            <a href="#panel-sensors">🌡️ Sensors</a>
+            <a href="#panel-firmware">📦 Firmware</a>
+            <a href="#panel-logs">📋 Logs</a>
+            <a href="#panel-security">🔒 Security</a>
+            <a href="#panel-backup">💾 Backup</a>
+            <a href="#panel-system">⚠️ System</a>
+        </nav>
+
+        <div class="config-section" id="panel-network">
             <div class="section-title">🌐 Network Configuration</div>
             <div class="version-row" style="margin-bottom: 15px;">
                 <span class="version-label">IP Address</span>
@@ -244,7 +282,7 @@
             </form>
         </div>
 
-        <div class="config-section">
+        <div class="config-section" id="panel-mqtt">
             <div class="section-title">
                 🔗 MQTT Configuration
                 <span id="mqtt-status" class="status-badge status-disconnected">Disconnected</span>
@@ -271,7 +309,7 @@
             </form>
         </div>
 
-        <div class="config-section">
+        <div class="config-section" id="panel-sensors">
             <div class="section-title">🌡️ Sensor Configuration</div>
             <form id="sensor-form">
                 <div class="form-group">
@@ -301,7 +339,7 @@
             </form>
         </div>
 
-        <div class="config-section">
+        <div class="config-section" id="panel-firmware">
             <div class="section-title">📦 Firmware Update</div>
             <div class="version-row">
                 <span class="version-label">Current Version</span>
@@ -340,7 +378,7 @@
             <button class="btn btn-primary" id="install-btn" onclick="doInstall()" disabled style="width: 100%; margin-top: 15px;">⬇️ Install Update</button>
         </div>
 
-        <div class="config-section">
+        <div class="config-section" id="panel-logs">
             <div class="section-title">📋 System Logs</div>
             <div class="btn-row" style="margin-bottom: 15px;">
                 <button class="btn btn-primary" onclick="refreshLogs()">🔄 Refresh</button>
@@ -368,7 +406,7 @@
             <pre id="log-output" style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; font-family: monospace; font-size: 0.8em; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; color: #aaa;">Click "Refresh" to load logs...</pre>
         </div>
 
-        <div class="config-section">
+        <div class="config-section" id="panel-security">
             <div class="section-title">🔒 Security</div>
             <div id="auth-session-info" style="display: none; margin-bottom: 15px; padding: 12px; background: rgba(77, 166, 255, 0.1); border-radius: 8px; border: 1px solid rgba(77, 166, 255, 0.3);">
                 <span style="color: #4da6ff;">👤 Logged in as: <strong id="logged-in-user"></strong></span>
@@ -402,7 +440,7 @@
             <button class="btn btn-primary" onclick="saveAuthConfig()">💾 Save Security Settings</button>
         </div>
 
-        <div class="config-section">
+        <div class="config-section" id="panel-backup">
             <div class="section-title">💾 Backup / Restore</div>
             <p style="margin-bottom: 15px; color: #ccc;">
                 Save your sensor names and settings so you don't have to re-enter them after a re-flash
@@ -420,7 +458,7 @@
             <button class="btn btn-danger" id="restore-btn" onclick="restoreBackup()" disabled>📤 Restore Backup</button>
         </div>
 
-        <div class="config-section danger-zone">
+        <div class="config-section danger-zone" id="panel-system">
             <div class="section-title">⚠️ System</div>
             <p style="margin-bottom: 15px; color: #ccc;">Device restart is required after changing WiFi settings.</p>
             <button class="btn btn-secondary" onclick="restartDevice()">🔄 Restart Device</button>
