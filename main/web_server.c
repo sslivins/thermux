@@ -359,6 +359,15 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     } else {
         cJSON_AddNullToObject(bus_stats, "seconds_since_last_success");
     }
+
+    /* Read-cycle duration statistics (helps validate read_interval headroom) */
+    onewire_read_duration_stats_t duration_stats;
+    onewire_temp_get_read_duration_stats(&duration_stats);
+    cJSON_AddNumberToObject(bus_stats, "last_read_duration_ms", duration_stats.last_ms);
+    cJSON_AddNumberToObject(bus_stats, "min_read_duration_ms", duration_stats.min_ms);
+    cJSON_AddNumberToObject(bus_stats, "max_read_duration_ms", duration_stats.max_ms);
+    cJSON_AddNumberToObject(bus_stats, "avg_read_duration_ms", duration_stats.avg_ms);
+
     cJSON_AddItemToObject(root, "bus_stats", bus_stats);
 
     char *json = cJSON_PrintUnformatted(root);
@@ -1344,6 +1353,54 @@ extern void set_sensor_read_interval(uint32_t ms);
 extern void set_sensor_publish_interval(uint32_t ms);
 
 /**
+ * @brief Estimated per-sensor overhead (ms) for reading a scratchpad off
+ * the bus (reset + match-ROM + 9-byte read), used only as a fallback
+ * before any real read cycle has completed. Conservative vs. the ~4-5ms
+ * typically observed, to avoid under-estimating on a noisy bus.
+ */
+#define SENSOR_READ_OVERHEAD_MS 10
+
+/**
+ * @brief Compute the minimum read_interval (ms) that leaves reasonable
+ * headroom over the actual time it takes to read every connected sensor.
+ *
+ * Prefers the worst observed read-cycle duration (onewire_temp's
+ * min/max/avg stats) once at least one read has completed, since that
+ * reflects real bus/sensor conditions. Falls back to a theoretical
+ * estimate (conversion delay for the current resolution + per-sensor
+ * bus overhead) before the first read cycle.
+ *
+ * Adds a 50% safety buffer (minimum +200ms) on top of the estimate so
+ * transient slow cycles don't cause the read task's effective cadence
+ * to silently exceed the configured interval.
+ */
+static uint32_t compute_safe_min_read_interval_ms(void)
+{
+    onewire_read_duration_stats_t stats;
+    onewire_temp_get_read_duration_stats(&stats);
+
+    uint32_t estimated_ms;
+    if (stats.sample_count > 0) {
+        estimated_ms = stats.max_ms;
+    } else {
+        static const uint32_t conversion_delay_ms[] = {100, 200, 400, 800}; /* 9,10,11,12-bit */
+        int idx = onewire_temp_get_resolution() - 9;
+        if (idx < 0) idx = 0;
+        if (idx > 3) idx = 3;
+        estimated_ms = conversion_delay_ms[idx] + (uint32_t)sensor_manager_get_count() * SENSOR_READ_OVERHEAD_MS;
+    }
+
+    uint32_t buffered_ms = estimated_ms + (estimated_ms / 2);
+    if (buffered_ms < estimated_ms + 200) {
+        buffered_ms = estimated_ms + 200;
+    }
+    if (buffered_ms < 1000) {
+        buffered_ms = 1000; /* keep in step with the existing 1s floor */
+    }
+    return buffered_ms;
+}
+
+/**
  * @brief Handler for GET /api/config/sensor
  */
 static esp_err_t api_config_sensor_get_handler(httpd_req_t *req)
@@ -1353,6 +1410,7 @@ static esp_err_t api_config_sensor_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "read_interval", get_sensor_read_interval());
     cJSON_AddNumberToObject(root, "publish_interval", get_sensor_publish_interval());
     cJSON_AddNumberToObject(root, "resolution", onewire_temp_get_resolution());
+    cJSON_AddNumberToObject(root, "min_safe_read_interval_ms", compute_safe_min_read_interval_ms());
     
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -1392,10 +1450,26 @@ static esp_err_t api_config_sensor_post_handler(httpd_req_t *req)
     uint32_t publish_interval = get_sensor_publish_interval();
     uint8_t resolution = onewire_temp_get_resolution();
     
+    /* Apply resolution first so the read-interval safety check below
+     * reflects the resolution being saved in this same request. */
+    if (cJSON_IsNumber(resolution_item)) {
+        resolution = (uint8_t)resolution_item->valueint;
+        if (resolution >= 9 && resolution <= 12) {
+            onewire_temp_set_resolution(resolution);
+        }
+    }
+
+    bool read_interval_clamped_for_safety = false;
+    uint32_t min_safe_read_interval_ms = compute_safe_min_read_interval_ms();
+
     if (cJSON_IsNumber(read_item)) {
         read_interval = (uint32_t)read_item->valueint;
         if (read_interval < 1000) read_interval = 1000;
         if (read_interval > 300000) read_interval = 300000;
+        if (read_interval < min_safe_read_interval_ms) {
+            read_interval = min_safe_read_interval_ms;
+            read_interval_clamped_for_safety = true;
+        }
         set_sensor_read_interval(read_interval);
     }
     
@@ -1404,13 +1478,6 @@ static esp_err_t api_config_sensor_post_handler(httpd_req_t *req)
         if (publish_interval < 5000) publish_interval = 5000;
         if (publish_interval > 600000) publish_interval = 600000;
         set_sensor_publish_interval(publish_interval);
-    }
-    
-    if (cJSON_IsNumber(resolution_item)) {
-        resolution = (uint8_t)resolution_item->valueint;
-        if (resolution >= 9 && resolution <= 12) {
-            onewire_temp_set_resolution(resolution);
-        }
     }
     
     cJSON_Delete(root);
@@ -1423,6 +1490,9 @@ static esp_err_t api_config_sensor_post_handler(httpd_req_t *req)
     if (err == ESP_OK) {
         cJSON_AddStringToObject(response, "message", "Sensor settings saved");
     }
+    cJSON_AddNumberToObject(response, "read_interval", read_interval);
+    cJSON_AddBoolToObject(response, "read_interval_clamped", read_interval_clamped_for_safety);
+    cJSON_AddNumberToObject(response, "min_safe_read_interval_ms", min_safe_read_interval_ms);
     
     char *json = cJSON_PrintUnformatted(response);
     cJSON_Delete(response);
@@ -1656,12 +1726,27 @@ static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
         cJSON *pi = cJSON_GetObjectItem(settings, "publish_interval_ms");
         cJSON *res = cJSON_GetObjectItem(settings, "resolution");
         if (cJSON_IsNumber(ri) && cJSON_IsNumber(pi) && cJSON_IsNumber(res)) {
-            nvs_storage_save_sensor_settings((uint32_t)ri->valueint, (uint32_t)pi->valueint, (uint8_t)res->valueint);
-            set_sensor_read_interval((uint32_t)ri->valueint);
-            set_sensor_publish_interval((uint32_t)pi->valueint);
+            /* Apply resolution first so the read-interval safety floor
+             * below reflects the resolution being restored. */
             if (res->valueint >= 9 && res->valueint <= 12) {
                 onewire_temp_set_resolution((uint8_t)res->valueint);
             }
+
+            uint32_t read_interval = (uint32_t)ri->valueint;
+            if (read_interval < 1000) read_interval = 1000;
+            if (read_interval > 300000) read_interval = 300000;
+            uint32_t min_safe_read_interval_ms = compute_safe_min_read_interval_ms();
+            if (read_interval < min_safe_read_interval_ms) {
+                read_interval = min_safe_read_interval_ms;
+            }
+
+            uint32_t publish_interval = (uint32_t)pi->valueint;
+            if (publish_interval < 5000) publish_interval = 5000;
+            if (publish_interval > 600000) publish_interval = 600000;
+
+            nvs_storage_save_sensor_settings(read_interval, publish_interval, onewire_temp_get_resolution());
+            set_sensor_read_interval(read_interval);
+            set_sensor_publish_interval(publish_interval);
         }
     }
 

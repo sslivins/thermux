@@ -980,7 +980,16 @@
                     body: JSON.stringify({ read_interval: readInterval, publish_interval: publishInterval, resolution: resolution })
                 });
                 if (checkAuthError(resp)) return;
-                if (resp.ok) { showToast('Sensor settings saved'); loadConfig(); }
+                if (resp.ok) {
+                    const result = await resp.json();
+                    if (result.read_interval_clamped) {
+                        const seconds = Math.ceil(result.read_interval / 1000);
+                        showToast(`Read interval raised to ${seconds}s - too low for the current sensor count/resolution to finish within the interval`, true);
+                    } else {
+                        showToast('Sensor settings saved');
+                    }
+                    loadConfig();
+                }
                 else { showToast('Failed to save sensor settings', true); }
             } catch (err) { showToast('Error saving sensor settings', true); }
         });
