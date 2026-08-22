@@ -32,6 +32,13 @@ static uint32_t s_consecutive_failed_cycles = 0;
 static int64_t s_last_successful_read_us = 0;
 static portMUX_TYPE s_stats_lock = portMUX_INITIALIZER_UNLOCKED;
 
+/* Read-cycle duration statistics (min/max/avg time to read all sensors) */
+static uint32_t s_last_read_duration_ms = 0;
+static uint32_t s_min_read_duration_ms = 0;
+static uint32_t s_max_read_duration_ms = 0;
+static uint64_t s_read_duration_sum_ms = 0;
+static uint32_t s_read_duration_sample_count = 0;
+
 /* DS18B20 family code and commands */
 #define DS18B20_FAMILY_CODE     0x28
 #define DS18B20_CMD_CONVERT     0x44
@@ -257,6 +264,21 @@ static void record_read_cycle(bool had_successful_read)
     } else {
         s_consecutive_failed_cycles++;
     }
+    portEXIT_CRITICAL(&s_stats_lock);
+}
+
+static void record_read_duration(uint32_t duration_ms)
+{
+    portENTER_CRITICAL(&s_stats_lock);
+    s_last_read_duration_ms = duration_ms;
+    if (s_read_duration_sample_count == 0 || duration_ms < s_min_read_duration_ms) {
+        s_min_read_duration_ms = duration_ms;
+    }
+    if (duration_ms > s_max_read_duration_ms) {
+        s_max_read_duration_ms = duration_ms;
+    }
+    s_read_duration_sum_ms += duration_ms;
+    s_read_duration_sample_count++;
     portEXIT_CRITICAL(&s_stats_lock);
 }
 
@@ -488,6 +510,7 @@ esp_err_t onewire_temp_read_all(onewire_sensor_t *sensors, int sensor_count)
     record_read_cycle(had_successful_read);
 
     int64_t elapsed_ms = (esp_timer_get_time() - start_time) / 1000;
+    record_read_duration((uint32_t)elapsed_ms);
     ESP_LOGD(TAG, "Read %d sensors in %lld ms", sensor_count, elapsed_ms);
 
     return result;
@@ -529,6 +552,23 @@ void onewire_temp_get_bus_health(onewire_bus_health_t *health)
     health->has_successful_read = s_last_successful_read_us > 0;
     health->seconds_since_last_success = health->has_successful_read
         ? (uint64_t)((now_us - s_last_successful_read_us) / 1000000)
+        : 0;
+    portEXIT_CRITICAL(&s_stats_lock);
+}
+
+void onewire_temp_get_read_duration_stats(onewire_read_duration_stats_t *stats)
+{
+    if (stats == NULL) {
+        return;
+    }
+
+    portENTER_CRITICAL(&s_stats_lock);
+    stats->last_ms = s_last_read_duration_ms;
+    stats->min_ms = s_min_read_duration_ms;
+    stats->max_ms = s_max_read_duration_ms;
+    stats->sample_count = s_read_duration_sample_count;
+    stats->avg_ms = s_read_duration_sample_count > 0
+        ? (uint32_t)(s_read_duration_sum_ms / s_read_duration_sample_count)
         : 0;
     portEXIT_CRITICAL(&s_stats_lock);
 }

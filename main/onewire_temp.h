@@ -46,6 +46,20 @@ typedef struct {
 } onewire_bus_health_t;
 
 /**
+ * @brief Read-cycle duration statistics (time to read all sensors in one
+ * onewire_temp_read_all() call), used to validate that the configured
+ * read interval leaves enough headroom for the actual hardware/bus
+ * conditions (sensor count, resolution, bus health).
+ */
+typedef struct {
+    uint32_t last_ms;           /**< Duration of the most recent read cycle */
+    uint32_t min_ms;            /**< Shortest read cycle observed since last reset */
+    uint32_t max_ms;            /**< Longest read cycle observed since last reset */
+    uint32_t avg_ms;            /**< Running average read cycle duration */
+    uint32_t sample_count;      /**< Number of read cycles included in the stats */
+} onewire_read_duration_stats_t;
+
+/**
  * @brief Initialize 1-Wire bus
  * @param gpio_num GPIO pin connected to 1-Wire data line
  */
@@ -101,6 +115,19 @@ void onewire_temp_get_error_stats(uint32_t *total_reads, uint32_t *failed_reads)
  * @brief Get recent and cycle-level bus health statistics
  */
 void onewire_temp_get_bus_health(onewire_bus_health_t *health);
+
+/**
+ * @brief Get read-cycle duration statistics (last/min/max/avg milliseconds
+ * to read all sensors in a single onewire_temp_read_all() call).
+ *
+ * Used to validate that a configured read interval leaves enough headroom
+ * for the actual measured read time, so the read task's effective cadence
+ * doesn't silently drift above the configured interval.
+ *
+ * @param stats Output stats. All fields are 0 if no read cycle has
+ * completed yet.
+ */
+void onewire_temp_get_read_duration_stats(onewire_read_duration_stats_t *stats);
 
 /**
  * @brief Reset bus error statistics counters to zero

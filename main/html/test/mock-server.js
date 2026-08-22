@@ -52,7 +52,7 @@ function defaultState() {
         },
         wifi: { ssid: '' },
         mqtt: { uri: 'mqtt://test-broker.local:1883', username: 'testuser' },
-        sensor: { read_interval: 10000, publish_interval: 30000, resolution: 12 },
+        sensor: { read_interval: 10000, publish_interval: 30000, resolution: 12, min_safe_read_interval_ms: 1000 },
         auth: { enabled: false, username: '', api_key: '' },
         authStatus: { auth_enabled: false, logged_in: true },
         logLevel: { level: 3, level_name: 'info' },
@@ -119,6 +119,35 @@ function createMockServer() {
         }
         if (req.method === 'GET' && url.pathname === '/api/config/sensor') {
             return sendJson(res, 200, state.sensor);
+        }
+        if (req.method === 'POST' && url.pathname === '/api/config/sensor') {
+            let parsed;
+            try {
+                parsed = JSON.parse(body);
+            } catch {
+                return sendJson(res, 400, { error: 'Invalid JSON' });
+            }
+            let readInterval = typeof parsed.read_interval === 'number' ? parsed.read_interval : state.sensor.read_interval;
+            const publishInterval = typeof parsed.publish_interval === 'number' ? parsed.publish_interval : state.sensor.publish_interval;
+            const resolution = typeof parsed.resolution === 'number' ? parsed.resolution : state.sensor.resolution;
+            if (readInterval < 1000) readInterval = 1000;
+            if (readInterval > 300000) readInterval = 300000;
+            const minSafe = state.sensor.min_safe_read_interval_ms || 1000;
+            let clamped = false;
+            if (readInterval < minSafe) {
+                readInterval = minSafe;
+                clamped = true;
+            }
+            state.sensor.read_interval = readInterval;
+            state.sensor.publish_interval = publishInterval;
+            state.sensor.resolution = resolution;
+            return sendJson(res, 200, {
+                success: true,
+                message: 'Sensor settings saved',
+                read_interval: readInterval,
+                read_interval_clamped: clamped,
+                min_safe_read_interval_ms: minSafe,
+            });
         }
         if (req.method === 'GET' && url.pathname === '/api/config/auth') {
             return sendJson(res, 200, state.auth);
