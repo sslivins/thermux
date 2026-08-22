@@ -10,6 +10,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "onewire_bus.h"
 #include "onewire_cmd.h"
 #include "onewire_crc.h"
@@ -23,6 +24,13 @@ static onewire_bus_handle_t s_bus_handle = NULL;
 static ds18b20_device_handle_t *s_ds18b20_handles = NULL;
 static int s_device_count = 0;
 static int s_resolution = 12;
+
+/* Serializes all 1-Wire bus traffic (scan vs. periodic read cycle). Without
+ * this, a user-triggered rescan and the background temperature_task can
+ * interleave reset/read-bit timing on the shared bus, corrupting the device
+ * search and silently dropping sensors from the scan results. */
+static SemaphoreHandle_t s_bus_mutex = NULL;
+#define BUS_MUTEX_TIMEOUT_MS 5000
 
 /* Bus error statistics */
 static uint32_t s_total_reads = 0;
@@ -286,6 +294,14 @@ esp_err_t onewire_temp_init(int gpio_num)
 {
     ESP_LOGD(TAG, "Initializing 1-Wire bus on GPIO %d", gpio_num);
 
+    if (s_bus_mutex == NULL) {
+        s_bus_mutex = xSemaphoreCreateMutex();
+        if (s_bus_mutex == NULL) {
+            ESP_LOGE(TAG, "Failed to create bus mutex");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     /* Configure 1-Wire bus */
     onewire_bus_config_t bus_config = {
         .bus_gpio_num = gpio_num,
@@ -305,7 +321,7 @@ esp_err_t onewire_temp_init(int gpio_num)
     return ESP_OK;
 }
 
-esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *found_count)
+static esp_err_t onewire_temp_scan_locked(onewire_sensor_t *sensors, int max_sensors, int *found_count)
 {
     ESP_LOGD(TAG, "Scanning for DS18B20 sensors...");
     
@@ -418,6 +434,17 @@ esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *fou
     return ESP_OK;
 }
 
+esp_err_t onewire_temp_scan(onewire_sensor_t *sensors, int max_sensors, int *found_count)
+{
+    if (s_bus_mutex == NULL || xSemaphoreTake(s_bus_mutex, pdMS_TO_TICKS(BUS_MUTEX_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Timed out waiting for bus lock; a read cycle is likely in progress");
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = onewire_temp_scan_locked(sensors, max_sensors, found_count);
+    xSemaphoreGive(s_bus_mutex);
+    return err;
+}
+
 esp_err_t onewire_temp_read(onewire_sensor_t *sensor, int index)
 {
     if (index < 0 || index >= s_device_count || s_ds18b20_handles[index] == NULL) {
@@ -450,7 +477,7 @@ esp_err_t onewire_temp_read(onewire_sensor_t *sensor, int index)
     return ESP_OK;
 }
 
-esp_err_t onewire_temp_read_all(onewire_sensor_t *sensors, int sensor_count)
+static esp_err_t onewire_temp_read_all_locked(onewire_sensor_t *sensors, int sensor_count)
 {
     if (sensor_count == 0 || sensor_count > s_device_count) {
         return ESP_ERR_INVALID_ARG;
@@ -514,6 +541,18 @@ esp_err_t onewire_temp_read_all(onewire_sensor_t *sensors, int sensor_count)
     ESP_LOGD(TAG, "Read %d sensors in %lld ms", sensor_count, elapsed_ms);
 
     return result;
+}
+
+esp_err_t onewire_temp_read_all(onewire_sensor_t *sensors, int sensor_count)
+{
+    if (s_bus_mutex == NULL || xSemaphoreTake(s_bus_mutex, pdMS_TO_TICKS(BUS_MUTEX_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Timed out waiting for bus lock; a rescan is likely in progress");
+        record_read_cycle(false);
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = onewire_temp_read_all_locked(sensors, sensor_count);
+    xSemaphoreGive(s_bus_mutex);
+    return err;
 }
 
 void onewire_address_to_string(const uint8_t *address, char *str)
