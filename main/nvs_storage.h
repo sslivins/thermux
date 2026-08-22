@@ -136,4 +136,19 @@ esp_err_t nvs_storage_load_auth_config(bool *enabled, char *username, size_t use
                                         char *password, size_t password_len,
                                         char *api_key, size_t api_key_len);
 
+/**
+ * @brief Save whether the cloud OTA update check should include GitHub
+ * pre-releases (beta channel), not just the latest full release.
+ */
+esp_err_t nvs_storage_save_ota_prerelease_channel(bool enabled);
+
+/**
+ * @brief Load whether the cloud OTA update check should include GitHub
+ * pre-releases (beta channel).
+ * @param enabled Output: whether the pre-release channel is enabled
+ * @return ESP_OK if found, ESP_ERR_NOT_FOUND if never configured (caller
+ *         should default to false/disabled in that case)
+ */
+esp_err_t nvs_storage_load_ota_prerelease_channel(bool *enabled);
+
 #endif /* NVS_STORAGE_H */

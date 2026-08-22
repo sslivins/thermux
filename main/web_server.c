@@ -600,6 +600,70 @@ static esp_err_t config_get_handler(httpd_req_t *req)
 }
 
 /**
+ * @brief Handler for GET /api/ota/channel - returns whether the pre-release
+ * (beta) channel is enabled for cloud update checks
+ */
+static esp_err_t api_ota_channel_get_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "include_prerelease", ota_updater_get_include_prerelease());
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for POST /api/ota/channel - enables/disables the
+ * pre-release (beta) channel for cloud update checks
+ * Body: {"include_prerelease": true|false}
+ */
+static esp_err_t api_ota_channel_post_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    char content[64];
+    int received = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No content");
+        return ESP_FAIL;
+    }
+    content[received] = '\0';
+
+    cJSON *root = cJSON_Parse(content);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *include_json = cJSON_GetObjectItem(root, "include_prerelease");
+    if (!include_json || !cJSON_IsBool(include_json)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing include_prerelease");
+        return ESP_FAIL;
+    }
+
+    bool enabled = cJSON_IsTrue(include_json);
+    cJSON_Delete(root);
+
+    ota_updater_set_include_prerelease(enabled);
+    esp_err_t err = nvs_storage_save_ota_prerelease_channel(enabled);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to persist OTA pre-release channel setting: %s", esp_err_to_name(err));
+    }
+
+    ESP_LOGI(TAG, "OTA pre-release channel %s", enabled ? "enabled" : "disabled");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
+/**
  * @brief Handler for POST /api/ota/check - starts async check
  */
 static esp_err_t api_ota_check_handler(httpd_req_t *req)
@@ -2086,6 +2150,20 @@ esp_err_t web_server_start(void)
         .handler = api_ota_check_handler,
     };
     REGISTER_URI(ota_check_uri);
+
+    httpd_uri_t ota_channel_get_uri = {
+        .uri = "/api/ota/channel",
+        .method = HTTP_GET,
+        .handler = api_ota_channel_get_handler,
+    };
+    REGISTER_URI(ota_channel_get_uri);
+
+    httpd_uri_t ota_channel_post_uri = {
+        .uri = "/api/ota/channel",
+        .method = HTTP_POST,
+        .handler = api_ota_channel_post_handler,
+    };
+    REGISTER_URI(ota_channel_post_uri);
 
     httpd_uri_t ota_status_uri = {
         .uri = "/api/ota/status",

@@ -319,6 +319,10 @@
                         <span class="version-label">Latest Version</span>
                         <span class="version-value" id="fw-latest-version">-</span>
                     </div>
+                    <label style="display:flex; align-items:center; gap:8px; color:#ccc; cursor:pointer; margin-bottom:12px;">
+                        <input type="checkbox" id="ota-include-prerelease" style="width:auto;" onchange="onPrereleaseChannelChanged(this.checked)"> Include pre-releases (beta channel)
+                    </label>
+                    <div class="form-hint" style="margin-bottom:12px;">Beta builds may be unstable. Only enable this if you want to test upcoming changes before an official release.</div>
                     <div class="update-status current" id="cloud-status">Click "Check for Updates" to check for a new version</div>
                     <button class="btn btn-secondary" id="check-btn" onclick="checkForUpdates()" style="width: 100%;">🔍 Check for Updates</button>
                 </div>
@@ -484,6 +488,15 @@
                 mqttBadge.textContent = status.mqtt_connected ? 'Connected' : 'Disconnected';
                 mqttBadge.className = 'status-badge ' + (status.mqtt_connected ? 'status-connected' : 'status-disconnected');
                 document.getElementById('fw-current-version').textContent = status.version;
+
+                /* Load OTA pre-release (beta) channel preference */
+                try {
+                    const channelResp = await fetch('/api/ota/channel', {cache: 'no-store'});
+                    const channel = await channelResp.json();
+                    document.getElementById('ota-include-prerelease').checked = !!channel.include_prerelease;
+                } catch (channelErr) {
+                    /* Non-fatal: leave checkbox at its default (unchecked) */
+                }
                 
                 /* Update network status - show a single active IP regardless of interface,
                    and the eth/wifi connection badges independently */
@@ -519,6 +532,33 @@
 
         /* === Firmware Update Tab Logic === */
         let activeTab = 'cloud';
+
+        /**
+         * Persist the pre-release (beta) channel checkbox to the device.
+         * Toggling this only changes which GitHub releases the *next*
+         * "Check for Updates" click considers - it does not itself trigger
+         * a check.
+         */
+        async function onPrereleaseChannelChanged(includePrerelease) {
+            const checkbox = document.getElementById('ota-include-prerelease');
+            checkbox.disabled = true;
+            try {
+                const resp = await fetch('/api/ota/channel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ include_prerelease: includePrerelease })
+                });
+                if (!resp.ok) throw new Error('Request failed');
+                showToast(includePrerelease
+                    ? 'Beta channel enabled - "Check for Updates" will now include pre-releases'
+                    : 'Beta channel disabled');
+            } catch (err) {
+                checkbox.checked = !includePrerelease;
+                showToast('Failed to update beta channel setting', true);
+            } finally {
+                checkbox.disabled = false;
+            }
+        }
 
         function switchFwTab(tab) {
             if (isUpdating) return;

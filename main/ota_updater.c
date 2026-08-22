@@ -8,6 +8,7 @@
 
 #include "ota_updater.h"
 #include "version_utils.h"
+#include "nvs_storage.h"
 #include "esp_log.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
@@ -24,8 +25,13 @@ static const char *TAG = "ota_updater";
 /* Forward declaration */
 extern const char *APP_VERSION;
 
-/* GitHub API URL for releases */
-#define GITHUB_API_URL "https://api.github.com/repos/%s/%s/releases/latest"
+/* GitHub API URL for the latest full (non-draft, non-prerelease) release.
+ * This is what GitHub's own /releases/latest semantics guarantee - it never
+ * returns a pre-release, regardless of tag naming. */
+#define GITHUB_API_URL_LATEST "https://api.github.com/repos/%s/%s/releases/latest"
+/* GitHub API URL for the release list (newest first), used when the
+ * pre-release/beta channel is enabled so drafts+prereleases are visible. */
+#define GITHUB_API_URL_LIST "https://api.github.com/repos/%s/%s/releases?per_page=5"
 /* Initial response buffer; grows dynamically as data arrives. The GitHub
  * /releases/latest payload is ~8KB and grows with asset count and release
  * notes length, so a fixed buffer truncated the JSON and broke parsing. */
@@ -35,6 +41,7 @@ extern const char *APP_VERSION;
 static char s_latest_version[32] = {0};
 static char s_download_url[512] = {0};
 static bool s_update_available = false;
+static bool s_include_prerelease = false;
 
 /* Async check state */
 typedef enum {
@@ -159,8 +166,26 @@ esp_err_t ota_updater_init(void)
     s_update_available = false;
     s_latest_version[0] = '\0';
     s_download_url[0] = '\0';
+
+    /* Load persisted pre-release channel preference; default to disabled
+     * (stable-only) if never configured. */
+    bool prerelease = false;
+    if (nvs_storage_load_ota_prerelease_channel(&prerelease) == ESP_OK) {
+        s_include_prerelease = prerelease;
+    }
+    ESP_LOGD(TAG, "Pre-release channel: %s", s_include_prerelease ? "enabled" : "disabled");
     
     return ESP_OK;
+}
+
+void ota_updater_set_include_prerelease(bool enabled)
+{
+    s_include_prerelease = enabled;
+}
+
+bool ota_updater_get_include_prerelease(void)
+{
+    return s_include_prerelease;
 }
 
 /* Retry configuration */
@@ -172,9 +197,15 @@ esp_err_t ota_updater_init(void)
  */
 static esp_err_t ota_check_for_update_internal(void)
 {
-    /* Build GitHub API URL */
+    /* Build GitHub API URL. When the pre-release/beta channel is enabled,
+     * query the release list (newest first) so drafts+prereleases are
+     * visible; GitHub's /releases/latest endpoint always skips them. */
     char url[256];
-    snprintf(url, sizeof(url), GITHUB_API_URL, CONFIG_GITHUB_OWNER, CONFIG_GITHUB_REPO);
+    if (s_include_prerelease) {
+        snprintf(url, sizeof(url), GITHUB_API_URL_LIST, CONFIG_GITHUB_OWNER, CONFIG_GITHUB_REPO);
+    } else {
+        snprintf(url, sizeof(url), GITHUB_API_URL_LATEST, CONFIG_GITHUB_OWNER, CONFIG_GITHUB_REPO);
+    }
     ESP_LOGD(TAG, "API URL: %s", url);
     
     char *response_buffer = NULL;
@@ -209,8 +240,31 @@ static esp_err_t ota_check_for_update_internal(void)
             /* Parse JSON response */
             cJSON *root = cJSON_Parse(response_buffer);
             if (root != NULL) {
-                cJSON *tag_name = cJSON_GetObjectItem(root, "tag_name");
-                cJSON *assets = cJSON_GetObjectItem(root, "assets");
+                /* In pre-release/beta mode, the response is an array of
+                 * releases (newest first). Pick the first non-draft entry
+                 * (prereleases are fine - that's the whole point). In
+                 * stable mode, the response is already a single release
+                 * object (drafts/prereleases already excluded by GitHub). */
+                cJSON *release = root;
+                if (cJSON_IsArray(root)) {
+                    release = NULL;
+                    int count = cJSON_GetArraySize(root);
+                    for (int i = 0; i < count; i++) {
+                        cJSON *candidate = cJSON_GetArrayItem(root, i);
+                        cJSON *draft = cJSON_GetObjectItem(candidate, "draft");
+                        if (cJSON_IsTrue(draft)) {
+                            continue;
+                        }
+                        release = candidate;
+                        break;
+                    }
+                    if (release == NULL) {
+                        ESP_LOGW(TAG, "No non-draft releases found");
+                    }
+                }
+
+                cJSON *tag_name = release ? cJSON_GetObjectItem(release, "tag_name") : NULL;
+                cJSON *assets = release ? cJSON_GetObjectItem(release, "assets") : NULL;
                 
                 if (cJSON_IsString(tag_name)) {
                     strncpy(s_latest_version, tag_name->valuestring, sizeof(s_latest_version) - 1);
@@ -284,6 +338,8 @@ static esp_err_t ota_check_for_update_internal(void)
                     } else {
                         ESP_LOGD(TAG, "Already up to date");
                     }
+                } else {
+                    ESP_LOGW(TAG, "No usable release found (tag_name missing)");
                 }
                 cJSON_Delete(root);
             } else {

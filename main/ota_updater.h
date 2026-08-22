@@ -82,4 +82,16 @@ void ota_get_download_stats(int *received, int *total);
  */
 const char* ota_get_current_version(void);
 
+/**
+ * @brief Enable/disable including GitHub pre-releases (beta channel) when
+ * checking for updates. Persisted to NVS by the caller (web_server.c);
+ * this only updates the in-memory flag used by the next check.
+ */
+void ota_updater_set_include_prerelease(bool enabled);
+
+/**
+ * @brief Get whether the pre-release (beta) channel is currently enabled.
+ */
+bool ota_updater_get_include_prerelease(void);
+
 #endif /* OTA_UPDATER_H */
