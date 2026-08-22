@@ -36,16 +36,16 @@ test.describe('Sensor read interval safety clamp', () => {
 
     test('saving a read interval below the safe minimum is clamped and shows an explanatory toast', async ({ page }) => {
         mock = await startMockServer();
-        mock.state.sensor.min_safe_read_interval_ms = 5000;
+        mock.state.sensor.min_safe_read_interval_ms = 8000;
         await page.goto(`${mock.baseURL}/config`);
         await expect(page.locator('#read-interval-current')).not.toContainText('Loading');
 
-        await page.locator('#read-interval').fill('1');
+        await page.locator('#read-interval').fill('5');
         await page.locator('#sensor-form button[type="submit"]').click();
 
         const sensorRequest = mock.requests.find((r) => r.method === 'POST' && r.path === '/api/config/sensor');
         expect(sensorRequest, 'expected a POST /api/config/sensor request').toBeTruthy();
-        expect(JSON.parse(sensorRequest.body).read_interval).toBe(1000);
-        await expect(page.locator('#toast')).toContainText('raised to 5s');
+        expect(JSON.parse(sensorRequest.body).read_interval).toBe(5000);
+        await expect(page.locator('#toast')).toContainText('raised to 8s');
     });
 });

@@ -315,8 +315,8 @@
                 <div class="form-group">
                     <label for="read-interval">Read Interval (seconds)</label>
                     <div class="current-value" id="read-interval-current">Current: Loading...</div>
-                    <input type="number" id="read-interval" name="read_interval" min="1" max="300" placeholder="10">
-                    <div class="form-hint">How often to read temperature from sensors (1-300 seconds)</div>
+                    <input type="number" id="read-interval" name="read_interval" min="5" max="300" placeholder="10">
+                    <div class="form-hint">How often to read temperature from sensors (5-300 seconds)</div>
                 </div>
                 <div class="form-group">
                     <label for="publish-interval">MQTT Publish Interval (seconds)</label>
@@ -1009,7 +1009,7 @@
             const readInterval = parseInt(document.getElementById('read-interval').value) * 1000;
             const publishInterval = parseInt(document.getElementById('publish-interval').value) * 1000;
             const resolution = parseInt(document.getElementById('resolution').value);
-            if (readInterval < 1000 || readInterval > 300000) { showToast('Read interval must be 1-300 seconds', true); return; }
+            if (readInterval < 5000 || readInterval > 300000) { showToast('Read interval must be 5-300 seconds', true); return; }
             if (publishInterval < 5000 || publishInterval > 600000) { showToast('Publish interval must be 5-600 seconds', true); return; }
             try {
                 const resp = await fetch('/api/config/sensor', {
