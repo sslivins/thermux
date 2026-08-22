@@ -56,6 +56,7 @@ function defaultState() {
         auth: { enabled: false, username: '', api_key: '' },
         authStatus: { auth_enabled: false, logged_in: true },
         logLevel: { level: 3, level_name: 'info' },
+        otaChannel: { include_prerelease: false },
         backup: {
             schema_version: 1,
             device_version: '3.0.0',
@@ -127,6 +128,22 @@ function createMockServer() {
         }
         if (req.method === 'GET' && url.pathname === '/api/logs/level') {
             return sendJson(res, 200, state.logLevel);
+        }
+        if (req.method === 'GET' && url.pathname === '/api/ota/channel') {
+            return sendJson(res, 200, state.otaChannel);
+        }
+        if (req.method === 'POST' && url.pathname === '/api/ota/channel') {
+            let parsed;
+            try {
+                parsed = JSON.parse(body);
+            } catch {
+                return sendJson(res, 400, { error: 'Invalid JSON' });
+            }
+            if (typeof parsed.include_prerelease !== 'boolean') {
+                return sendJson(res, 400, { error: 'Missing include_prerelease' });
+            }
+            state.otaChannel.include_prerelease = parsed.include_prerelease;
+            return sendJson(res, 200, { success: true });
         }
 
         if (req.method === 'GET' && url.pathname === '/api/backup') {

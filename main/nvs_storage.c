@@ -442,3 +442,45 @@ esp_err_t nvs_storage_load_auth_config(bool *enabled, char *username, size_t use
     nvs_close(handle);
     return ESP_OK;
 }
+
+esp_err_t nvs_storage_save_ota_prerelease_channel(bool enabled)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    nvs_set_u8(handle, "ota_prerelease", enabled ? 1 : 0);
+
+    err = nvs_commit(handle);
+    nvs_close(handle);
+
+    ESP_LOGI(TAG, "Saved OTA pre-release channel setting (enabled=%d)", enabled);
+    return err;
+}
+
+esp_err_t nvs_storage_load_ota_prerelease_channel(bool *enabled)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t value = 0;
+    err = nvs_get_u8(handle, "ota_prerelease", &value);
+    nvs_close(handle);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    *enabled = (value != 0);
+    return ESP_OK;
+}
