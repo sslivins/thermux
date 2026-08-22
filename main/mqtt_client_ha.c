@@ -221,6 +221,16 @@ esp_err_t mqtt_ha_register_sensor(const char *sensor_id, const char *friendly_na
     char unique_id[64];
     snprintf(unique_id, sizeof(unique_id), "%s_%s", CONFIG_MQTT_BASE_TOPIC, sensor_id);
     cJSON_AddStringToObject(root, "unique_id", unique_id);
+
+    /* Pin the entity_id slug to the (stable) 1-wire sensor id rather than
+     * letting HA derive it from "name" above. Without this, HA generates
+     * entity_id once from the initial name and never changes it - if the
+     * friendly name is set/edited later (or the sensor is repurposed), the
+     * entity_id keeps referencing the old/original name forever while the
+     * displayed friendly name has since diverged. object_id fixes the
+     * entity_id to the sensor_id, leaving "name" free to be purely cosmetic
+     * and safely editable at any time. */
+    cJSON_AddStringToObject(root, "object_id", unique_id);
     
     /* State topic */
     char state_topic[128];
