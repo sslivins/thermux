@@ -344,11 +344,23 @@ static esp_err_t ota_check_for_update_internal(void)
                         ESP_LOGD(TAG, "Already up to date");
                     }
                 } else {
+                    /* No usable tag_name - treat as a failed check so the
+                     * retry logic in ota_check_for_update() kicks in instead
+                     * of silently reporting success with an empty/"unknown"
+                     * version. This was previously left as ESP_OK, which
+                     * meant a transient hiccup (e.g. all-draft releases,
+                     * unexpected response shape) permanently stuck the UI
+                     * on "unknown" until the user tried again by hand. */
                     ESP_LOGW(TAG, "No usable release found (tag_name missing)");
+                    err = ESP_FAIL;
                 }
                 cJSON_Delete(root);
             } else {
+                /* Same reasoning as above: a JSON parse failure (e.g. a
+                 * truncated/partial response) must not be treated as a
+                 * successful check. */
                 ESP_LOGE(TAG, "Failed to parse JSON response");
+                err = ESP_FAIL;
             }
         } else if (status == 200 && response_buffer == NULL) {
             ESP_LOGE(TAG, "HTTP 200 but no response data received");
