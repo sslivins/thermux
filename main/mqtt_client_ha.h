@@ -73,7 +73,6 @@ esp_err_t mqtt_ha_publish_diagnostics(void);
  * and a live progress bar, backed by the ota_updater module.
  */
 esp_err_t mqtt_ha_register_update_entity(void);
-
 /**
  * @brief Publish the firmware update entity state
  * @param installed_version Currently running firmware version
@@ -85,5 +84,14 @@ esp_err_t mqtt_ha_publish_update_state(const char *installed_version,
                                        const char *latest_version,
                                        const char *release_url,
                                        int update_percentage);
+
+/**
+ * @brief Register the Home Assistant "Rescan Sensors" button entity (MQTT discovery)
+ *
+ * Exposes an HA `button` entity that triggers sensor_manager_rescan() when
+ * pressed, so a 1-Wire bus rescan can be initiated from Home Assistant
+ * without needing to open the device's web UI.
+ */
+esp_err_t mqtt_ha_register_rescan_button(void);
 
 #endif /* MQTT_CLIENT_HA_H */
