@@ -12,6 +12,7 @@
 #include "wifi_manager.h"
 #include "ota_updater.h"
 #include "time_sync.h"
+#include "esp_system.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "cJSON.h"
@@ -28,6 +29,8 @@ static bool s_connected = false;
 extern const char *APP_VERSION;
 extern uint32_t get_sensor_read_interval(void);
 extern uint32_t get_sensor_publish_interval(void);
+extern void set_sensor_read_interval(uint32_t ms);
+extern void set_sensor_publish_interval(uint32_t ms);
 
 /**
  * @brief MQTT event handler
@@ -79,6 +82,23 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             snprintf(resolution_cmd_topic, sizeof(resolution_cmd_topic), "%s/resolution/set", CONFIG_MQTT_BASE_TOPIC);
             esp_mqtt_client_subscribe(s_mqtt_client, resolution_cmd_topic, 1);
             mqtt_ha_publish_resolution_state();
+        }
+
+        /* Subscribe to the HA read/publish interval "number" commands */
+        {
+            char read_cmd_topic[128], publish_cmd_topic[128];
+            snprintf(read_cmd_topic, sizeof(read_cmd_topic), "%s/read_interval/set", CONFIG_MQTT_BASE_TOPIC);
+            snprintf(publish_cmd_topic, sizeof(publish_cmd_topic), "%s/publish_interval/set", CONFIG_MQTT_BASE_TOPIC);
+            esp_mqtt_client_subscribe(s_mqtt_client, read_cmd_topic, 1);
+            esp_mqtt_client_subscribe(s_mqtt_client, publish_cmd_topic, 1);
+            mqtt_ha_publish_interval_state();
+        }
+
+        /* Subscribe to the HA "Restart Device" button command */
+        {
+            char restart_cmd_topic[128];
+            snprintf(restart_cmd_topic, sizeof(restart_cmd_topic), "%s/restart/trigger", CONFIG_MQTT_BASE_TOPIC);
+            esp_mqtt_client_subscribe(s_mqtt_client, restart_cmd_topic, 1);
         }
         break;
         
@@ -153,6 +173,52 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
                 } else {
                     ESP_LOGW(TAG, "Ignoring invalid resolution request: '%s'", bits_str);
                 }
+            }
+        }
+
+        /* Read/Publish interval numbers */
+        {
+            char read_cmd_topic[128], publish_cmd_topic[128];
+            int read_cmd_len = snprintf(read_cmd_topic, sizeof(read_cmd_topic),
+                                        "%s/read_interval/set", CONFIG_MQTT_BASE_TOPIC);
+            int publish_cmd_len = snprintf(publish_cmd_topic, sizeof(publish_cmd_topic),
+                                           "%s/publish_interval/set", CONFIG_MQTT_BASE_TOPIC);
+            if (event->data_len > 0 && event->data_len < 16) {
+                char value_str[16] = {0};
+                memcpy(value_str, event->data, event->data_len);
+                long ms = atol(value_str);
+
+                if (event->topic_len == read_cmd_len &&
+                    strncmp(event->topic, read_cmd_topic, read_cmd_len) == 0) {
+                    if (ms < 5000) ms = 5000;
+                    if (ms > 300000) ms = 300000;
+                    ESP_LOGI(TAG, "HA requested read interval: %ldms", ms);
+                    set_sensor_read_interval((uint32_t)ms);
+                    nvs_storage_save_sensor_settings((uint32_t)ms, get_sensor_publish_interval(),
+                                                     (uint8_t)onewire_temp_get_resolution());
+                    mqtt_ha_publish_interval_state();
+                } else if (event->topic_len == publish_cmd_len &&
+                          strncmp(event->topic, publish_cmd_topic, publish_cmd_len) == 0) {
+                    if (ms < 5000) ms = 5000;
+                    if (ms > 600000) ms = 600000;
+                    ESP_LOGI(TAG, "HA requested publish interval: %ldms", ms);
+                    set_sensor_publish_interval((uint32_t)ms);
+                    nvs_storage_save_sensor_settings(get_sensor_read_interval(), (uint32_t)ms,
+                                                     (uint8_t)onewire_temp_get_resolution());
+                    mqtt_ha_publish_interval_state();
+                }
+            }
+        }
+
+        /* Restart Device button */
+        {
+            char restart_cmd_topic[128];
+            int restart_cmd_len = snprintf(restart_cmd_topic, sizeof(restart_cmd_topic),
+                                           "%s/restart/trigger", CONFIG_MQTT_BASE_TOPIC);
+            if (event->topic_len == restart_cmd_len &&
+                strncmp(event->topic, restart_cmd_topic, restart_cmd_len) == 0) {
+                ESP_LOGW(TAG, "HA requested device restart");
+                esp_restart();
             }
         }
         break;
@@ -387,6 +453,10 @@ esp_err_t mqtt_ha_publish_discovery_all(void)
 
     /* Register the 1-Wire resolution select */
     mqtt_ha_register_resolution_select();
+
+    /* Register the read/publish interval numbers and restart button */
+    mqtt_ha_register_interval_numbers();
+    mqtt_ha_register_restart_button();
     
     ESP_LOGD(TAG, "Published discovery for %d sensors + diagnostics", count);
     return ESP_OK;
@@ -683,6 +753,164 @@ esp_err_t mqtt_ha_publish_resolution_state(void)
     int msg_id = esp_mqtt_client_publish(s_mqtt_client, state_topic, payload, 0, 1, 1);
 
     return msg_id < 0 ? ESP_FAIL : ESP_OK;
+}
+
+static esp_err_t register_interval_number(const char *object_id,
+                                          const char *name,
+                                          const char *state_topic_suffix,
+                                          const char *command_topic_suffix,
+                                          uint32_t min_ms,
+                                          uint32_t max_ms)
+{
+    char discovery_topic[256];
+    snprintf(discovery_topic, sizeof(discovery_topic),
+             "%s/number/%s_%s/config",
+             CONFIG_HA_DISCOVERY_PREFIX, CONFIG_MQTT_BASE_TOPIC, object_id);
+
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    cJSON_AddStringToObject(root, "name", name);
+
+    char unique_id[96];
+    snprintf(unique_id, sizeof(unique_id), "%s_%s", CONFIG_MQTT_BASE_TOPIC, object_id);
+    cJSON_AddStringToObject(root, "unique_id", unique_id);
+    cJSON_AddStringToObject(root, "object_id", unique_id);
+
+    char state_topic[128];
+    snprintf(state_topic, sizeof(state_topic), "%s/%s", CONFIG_MQTT_BASE_TOPIC, state_topic_suffix);
+    cJSON_AddStringToObject(root, "state_topic", state_topic);
+
+    char command_topic[128];
+    snprintf(command_topic, sizeof(command_topic), "%s/%s", CONFIG_MQTT_BASE_TOPIC, command_topic_suffix);
+    cJSON_AddStringToObject(root, "command_topic", command_topic);
+
+    cJSON_AddNumberToObject(root, "min", min_ms);
+    cJSON_AddNumberToObject(root, "max", max_ms);
+    cJSON_AddNumberToObject(root, "step", 1000);
+    cJSON_AddStringToObject(root, "unit_of_measurement", "ms");
+    cJSON_AddStringToObject(root, "mode", "box");
+    cJSON_AddStringToObject(root, "icon", "mdi:timer-cog-outline");
+    cJSON_AddStringToObject(root, "entity_category", "config");
+
+    char availability_topic[128];
+    snprintf(availability_topic, sizeof(availability_topic), "%s/status", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "availability_topic", availability_topic);
+    cJSON_AddStringToObject(root, "payload_available", "online");
+    cJSON_AddStringToObject(root, "payload_not_available", "offline");
+
+    cJSON_AddItemToObject(root, "device", create_device_info());
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (payload == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    int msg_id = esp_mqtt_client_publish(s_mqtt_client, discovery_topic, payload, 0, 1, 1);
+    free(payload);
+    return msg_id < 0 ? ESP_FAIL : ESP_OK;
+}
+
+esp_err_t mqtt_ha_register_interval_numbers(void)
+{
+#if CONFIG_HA_DISCOVERY_ENABLED
+    if (!s_connected || s_mqtt_client == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    register_interval_number("read_interval", "Sensor Read Interval",
+                             "read_interval/state", "read_interval/set",
+                             5000, 300000);
+    register_interval_number("publish_interval", "MQTT Publish Interval",
+                             "publish_interval/state", "publish_interval/set",
+                             5000, 600000);
+
+    ESP_LOGD(TAG, "Registered read/publish interval numbers with HA");
+    return ESP_OK;
+#else
+    return ESP_OK;
+#endif
+}
+
+esp_err_t mqtt_ha_publish_interval_state(void)
+{
+    if (!s_connected || s_mqtt_client == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char payload[16];
+    char topic[128];
+
+    snprintf(payload, sizeof(payload), "%lu", (unsigned long)get_sensor_read_interval());
+    snprintf(topic, sizeof(topic), "%s/read_interval/state", CONFIG_MQTT_BASE_TOPIC);
+    esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 1);
+
+    snprintf(payload, sizeof(payload), "%lu", (unsigned long)get_sensor_publish_interval());
+    snprintf(topic, sizeof(topic), "%s/publish_interval/state", CONFIG_MQTT_BASE_TOPIC);
+    esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 1);
+
+    return ESP_OK;
+}
+
+esp_err_t mqtt_ha_register_restart_button(void)
+{
+#if CONFIG_HA_DISCOVERY_ENABLED
+    if (!s_connected || s_mqtt_client == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char discovery_topic[256];
+    snprintf(discovery_topic, sizeof(discovery_topic),
+             "%s/button/%s_restart/config",
+             CONFIG_HA_DISCOVERY_PREFIX, CONFIG_MQTT_BASE_TOPIC);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "name", "Restart Device");
+
+    char unique_id[64];
+    snprintf(unique_id, sizeof(unique_id), "%s_restart", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "unique_id", unique_id);
+    cJSON_AddStringToObject(root, "object_id", unique_id);
+
+    char command_topic[128];
+    snprintf(command_topic, sizeof(command_topic), "%s/restart/trigger", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "command_topic", command_topic);
+    cJSON_AddStringToObject(root, "payload_press", "trigger");
+    cJSON_AddStringToObject(root, "icon", "mdi:restart");
+    cJSON_AddStringToObject(root, "entity_category", "config");
+    cJSON_AddStringToObject(root, "device_class", "restart");
+
+    char availability_topic[128];
+    snprintf(availability_topic, sizeof(availability_topic), "%s/status", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "availability_topic", availability_topic);
+    cJSON_AddStringToObject(root, "payload_available", "online");
+    cJSON_AddStringToObject(root, "payload_not_available", "offline");
+
+    cJSON_AddItemToObject(root, "device", create_device_info());
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    if (payload == NULL) {
+        ESP_LOGE(TAG, "Failed to create restart button discovery payload");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int msg_id = esp_mqtt_client_publish(s_mqtt_client, discovery_topic, payload, 0, 1, 1);
+    free(payload);
+
+    if (msg_id < 0) {
+        ESP_LOGE(TAG, "Failed to publish restart button discovery");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGD(TAG, "Registered restart button with HA");
+    return ESP_OK;
+#else
+    return ESP_OK;
+#endif
 }
 
 esp_err_t mqtt_ha_publish_update_state(const char *installed_version,
@@ -994,6 +1222,9 @@ esp_err_t mqtt_ha_register_diagnostic_entities(void)
     register_diagnostic_sensor("bus_consecutive_failed_cycles",
                                "Consecutive Failed Bus Cycles",
                                "mdi:counter", NULL, NULL, "measurement", true);
+    register_diagnostic_sensor("sensor_count", "Sensor Count",
+                               "mdi:thermometer-lines", NULL, NULL,
+                               "measurement", true);
 
     return ESP_OK;
 #else
@@ -1084,6 +1315,10 @@ esp_err_t mqtt_ha_publish_diagnostics(void)
              CONFIG_MQTT_BASE_TOPIC);
     snprintf(value_buf, sizeof(value_buf), "%lu",
              (unsigned long)health.consecutive_failed_cycles);
+    esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 1);
+
+    snprintf(topic, sizeof(topic), "%s/diagnostic/sensor_count", CONFIG_MQTT_BASE_TOPIC);
+    snprintf(value_buf, sizeof(value_buf), "%d", sensor_manager_get_count());
     esp_mqtt_client_publish(s_mqtt_client, topic, value_buf, 0, 1, 1);
     
     ESP_LOGD(TAG, "Published bus stats: total=%lu, failed=%lu, lifetime=%.2f%%, recent=%.2f%%, failed_cycles=%lu",
