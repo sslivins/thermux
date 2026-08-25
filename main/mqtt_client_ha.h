@@ -110,4 +110,20 @@ esp_err_t mqtt_ha_register_resolution_select(void);
  */
 esp_err_t mqtt_ha_publish_resolution_state(void);
 
+/**
+ * @brief Register HA `number` entities for read/publish intervals and the
+ * "Restart Device" button (MQTT discovery)
+ *
+ * Lets the sensor read interval and MQTT publish interval be tuned directly
+ * from Home Assistant (mirrors the web UI's sensor settings page), and
+ * exposes a button that triggers a device restart.
+ */
+esp_err_t mqtt_ha_register_interval_numbers(void);
+esp_err_t mqtt_ha_register_restart_button(void);
+
+/**
+ * @brief Publish the current read/publish interval values to Home Assistant
+ */
+esp_err_t mqtt_ha_publish_interval_state(void);
+
 #endif /* MQTT_CLIENT_HA_H */
