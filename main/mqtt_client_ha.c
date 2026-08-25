@@ -26,6 +26,8 @@ static bool s_connected = false;
 
 /* Forward declaration */
 extern const char *APP_VERSION;
+extern uint32_t get_sensor_read_interval(void);
+extern uint32_t get_sensor_publish_interval(void);
 
 /**
  * @brief MQTT event handler
@@ -69,6 +71,14 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             char rescan_cmd_topic[128];
             snprintf(rescan_cmd_topic, sizeof(rescan_cmd_topic), "%s/rescan/trigger", CONFIG_MQTT_BASE_TOPIC);
             esp_mqtt_client_subscribe(s_mqtt_client, rescan_cmd_topic, 1);
+        }
+
+        /* Subscribe to the HA "1-Wire Resolution" select command */
+        {
+            char resolution_cmd_topic[128];
+            snprintf(resolution_cmd_topic, sizeof(resolution_cmd_topic), "%s/resolution/set", CONFIG_MQTT_BASE_TOPIC);
+            esp_mqtt_client_subscribe(s_mqtt_client, resolution_cmd_topic, 1);
+            mqtt_ha_publish_resolution_state();
         }
         break;
         
@@ -118,6 +128,30 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
                 esp_err_t rescan_err = sensor_manager_rescan();
                 if (rescan_err != ESP_OK) {
                     ESP_LOGW(TAG, "Sensor rescan failed: %s", esp_err_to_name(rescan_err));
+                }
+            }
+        }
+
+        /* 1-Wire Resolution select */
+        {
+            char resolution_cmd_topic[128];
+            int resolution_cmd_len = snprintf(resolution_cmd_topic, sizeof(resolution_cmd_topic),
+                                              "%s/resolution/set", CONFIG_MQTT_BASE_TOPIC);
+            if (event->topic_len == resolution_cmd_len &&
+                strncmp(event->topic, resolution_cmd_topic, resolution_cmd_len) == 0 &&
+                event->data_len > 0 && event->data_len < 8) {
+                char bits_str[8] = {0};
+                memcpy(bits_str, event->data, event->data_len);
+                int bits = atoi(bits_str);
+                if (bits >= 9 && bits <= 12) {
+                    ESP_LOGI(TAG, "HA requested 1-Wire resolution: %d bits", bits);
+                    onewire_temp_set_resolution(bits);
+                    uint32_t read_ms = get_sensor_read_interval();
+                    uint32_t publish_ms = get_sensor_publish_interval();
+                    nvs_storage_save_sensor_settings(read_ms, publish_ms, (uint8_t)bits);
+                    mqtt_ha_publish_resolution_state();
+                } else {
+                    ESP_LOGW(TAG, "Ignoring invalid resolution request: '%s'", bits_str);
                 }
             }
         }
@@ -350,6 +384,9 @@ esp_err_t mqtt_ha_publish_discovery_all(void)
 
     /* Register the rescan sensors button */
     mqtt_ha_register_rescan_button();
+
+    /* Register the 1-Wire resolution select */
+    mqtt_ha_register_resolution_select();
     
     ESP_LOGD(TAG, "Published discovery for %d sensors + diagnostics", count);
     return ESP_OK;
@@ -561,6 +598,91 @@ esp_err_t mqtt_ha_register_rescan_button(void)
 #else
     return ESP_OK;
 #endif
+}
+
+esp_err_t mqtt_ha_register_resolution_select(void)
+{
+#if CONFIG_HA_DISCOVERY_ENABLED
+    if (!s_connected || s_mqtt_client == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char discovery_topic[256];
+    snprintf(discovery_topic, sizeof(discovery_topic),
+             "%s/select/%s_resolution/config",
+             CONFIG_HA_DISCOVERY_PREFIX, CONFIG_MQTT_BASE_TOPIC);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "name", "1-Wire Resolution");
+
+    char unique_id[64];
+    snprintf(unique_id, sizeof(unique_id), "%s_resolution", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "unique_id", unique_id);
+    cJSON_AddStringToObject(root, "object_id", unique_id);
+
+    cJSON *options = cJSON_CreateArray();
+    cJSON_AddItemToArray(options, cJSON_CreateString("9"));
+    cJSON_AddItemToArray(options, cJSON_CreateString("10"));
+    cJSON_AddItemToArray(options, cJSON_CreateString("11"));
+    cJSON_AddItemToArray(options, cJSON_CreateString("12"));
+    cJSON_AddItemToObject(root, "options", options);
+
+    char state_topic[128];
+    snprintf(state_topic, sizeof(state_topic), "%s/resolution/state", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "state_topic", state_topic);
+
+    char command_topic[128];
+    snprintf(command_topic, sizeof(command_topic), "%s/resolution/set", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "command_topic", command_topic);
+
+    cJSON_AddStringToObject(root, "icon", "mdi:decimal");
+    cJSON_AddStringToObject(root, "entity_category", "config");
+
+    char availability_topic[128];
+    snprintf(availability_topic, sizeof(availability_topic), "%s/status", CONFIG_MQTT_BASE_TOPIC);
+    cJSON_AddStringToObject(root, "availability_topic", availability_topic);
+    cJSON_AddStringToObject(root, "payload_available", "online");
+    cJSON_AddStringToObject(root, "payload_not_available", "offline");
+
+    cJSON_AddItemToObject(root, "device", create_device_info());
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    if (payload == NULL) {
+        ESP_LOGE(TAG, "Failed to create resolution select discovery payload");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int msg_id = esp_mqtt_client_publish(s_mqtt_client, discovery_topic, payload, 0, 1, 1);
+    free(payload);
+
+    if (msg_id < 0) {
+        ESP_LOGE(TAG, "Failed to publish resolution select discovery");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGD(TAG, "Registered 1-Wire resolution select with HA");
+    return ESP_OK;
+#else
+    return ESP_OK;
+#endif
+}
+
+esp_err_t mqtt_ha_publish_resolution_state(void)
+{
+    if (!s_connected || s_mqtt_client == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char payload[8];
+    snprintf(payload, sizeof(payload), "%d", onewire_temp_get_resolution());
+
+    char state_topic[128];
+    snprintf(state_topic, sizeof(state_topic), "%s/resolution/state", CONFIG_MQTT_BASE_TOPIC);
+    int msg_id = esp_mqtt_client_publish(s_mqtt_client, state_topic, payload, 0, 1, 1);
+
+    return msg_id < 0 ? ESP_FAIL : ESP_OK;
 }
 
 esp_err_t mqtt_ha_publish_update_state(const char *installed_version,

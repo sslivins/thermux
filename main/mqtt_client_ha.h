@@ -94,4 +94,20 @@ esp_err_t mqtt_ha_publish_update_state(const char *installed_version,
  */
 esp_err_t mqtt_ha_register_rescan_button(void);
 
+/**
+ * @brief Register the Home Assistant "1-Wire Resolution" select entity
+ * (MQTT discovery)
+ *
+ * Exposes an HA `select` entity listing the DS18B20 resolution options
+ * (9/10/11/12-bit) that lets the resolution be changed from Home Assistant
+ * without needing to open the device's web UI. The choice is persisted to
+ * NVS and applied immediately via onewire_temp_set_resolution().
+ */
+esp_err_t mqtt_ha_register_resolution_select(void);
+
+/**
+ * @brief Publish the current 1-Wire resolution state to Home Assistant
+ */
+esp_err_t mqtt_ha_publish_resolution_state(void);
+
 #endif /* MQTT_CLIENT_HA_H */
