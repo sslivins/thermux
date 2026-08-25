@@ -201,8 +201,16 @@ static void ota_check_task(void *pvParameters)
 #if CONFIG_OTA_ENABLED
         ota_check_for_update();
 #endif
-        /* Check at configured interval */
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_OTA_CHECK_INTERVAL_HOURS * 3600 * 1000));
+        /* Check at configured interval. pdMS_TO_TICKS() multiplies the
+         * millisecond value by configTICK_RATE_HZ before dividing by 1000,
+         * so passing a full 24h-in-ms value (86,400,000) overflows 32 bits
+         * and wraps to a ~8-minute delay instead - which was silently
+         * causing the OTA check (and its "update available" MQTT publish)
+         * to re-run every ~8 minutes rather than once a day. Delay in
+         * seconds and use pdSECOND_TO_TICKS-equivalent math to stay well
+         * clear of the overflow. */
+        uint32_t interval_s = (uint32_t)CONFIG_OTA_CHECK_INTERVAL_HOURS * 3600;
+        vTaskDelay(pdMS_TO_TICKS(1000) * interval_s);
     }
 }
 
