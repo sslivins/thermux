@@ -29,6 +29,7 @@
 #include "web_server.h"
 #include "ota_updater.h"
 #include "log_buffer.h"
+#include "log_persist.h"
 #include "time_sync.h"
 
 static const char *TAG = "main";
@@ -38,7 +39,7 @@ EventGroupHandle_t network_event_group;
 const int NETWORK_CONNECTED_BIT = BIT0;
 
 /* Application version - update for each release */
-const char *APP_VERSION = "3.3.6";
+const char *APP_VERSION = "3.3.7";
 
 /* Runtime sensor settings (can be changed via web UI) */
 static uint32_t s_read_interval_ms = CONFIG_SENSOR_READ_INTERVAL_MS;
@@ -288,7 +289,24 @@ void app_main(void)
 {
     /* Initialize log buffer first to capture all logs */
     log_buffer_init(LOG_BUFFER_SIZE);
-    
+
+    /* Recover log history from the previous boot (persisted to flash) and
+     * seed it into the fresh RAM ring buffer, then start persisting again */
+    {
+        static char recovered[LOG_BUFFER_SIZE];
+        size_t recovered_len = 0;
+        if (log_persist_init(recovered, sizeof(recovered), &recovered_len) == ESP_OK &&
+            recovered_len > 0) {
+            static const char header[] = "\n===== Recovered log from previous boot =====\n";
+            static const char footer[] = "\n===== End of previous boot log =====\n\n";
+            log_buffer_seed(header, sizeof(header) - 1);
+            log_buffer_seed(recovered, recovered_len);
+            log_buffer_seed(footer, sizeof(footer) - 1);
+        }
+        esp_register_shutdown_handler(log_persist_flush);
+        log_persist_start_periodic_flush(300); /* every 5 minutes */
+    }
+
     /* Set default runtime log level to INFO (compile-time is DEBUG to allow switching) */
     esp_log_level_set("*", ESP_LOG_INFO);
     
