@@ -32,6 +32,14 @@ size_t log_buffer_get(char *out_buffer, size_t buffer_size);
 void log_buffer_clear(void);
 
 /**
+ * @brief Inject raw text directly into the ring buffer, bypassing the
+ *        vprintf hook/filtering. Used to seed recovered pre-reboot logs.
+ * @param text Raw bytes to append
+ * @param len  Number of bytes to append
+ */
+void log_buffer_seed(const char *text, size_t len);
+
+/**
  * @brief Get buffer usage info
  * @param used Pointer to store bytes used
  * @param total Pointer to store total size

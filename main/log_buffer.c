@@ -150,6 +150,24 @@ size_t log_buffer_get(char *out_buffer, size_t buffer_size)
     return copied;
 }
 
+void log_buffer_seed(const char *text, size_t len)
+{
+    if (!s_buffer || !s_mutex || !text || len == 0) {
+        return;
+    }
+
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        for (size_t i = 0; i < len; i++) {
+            s_buffer[s_head] = text[i];
+            s_head = (s_head + 1) % s_buffer_size;
+            if (s_used < s_buffer_size) {
+                s_used++;
+            }
+        }
+        xSemaphoreGive(s_mutex);
+    }
+}
+
 void log_buffer_clear(void)
 {
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {

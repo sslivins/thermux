@@ -44,6 +44,7 @@ idf_component_register(
         "nvs_storage.c"
         "sensor_manager.c"
         "log_buffer.c"
+        "log_persist.c"
         "version_utils.c"
         "time_sync.c"
     INCLUDE_DIRS "."
@@ -60,6 +61,8 @@ idf_component_register(
         esp_netif
         esp_event
         driver
+        esp_partition
+        esp_timer
     EMBED_FILES
         "${HTML_BUILD_DIR}/index.html.gz"
         "${HTML_BUILD_DIR}/config.html.gz"
