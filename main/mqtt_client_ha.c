@@ -15,6 +15,9 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_tls.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
@@ -24,6 +27,70 @@ static const char *TAG = "mqtt_ha";
 
 static esp_mqtt_client_handle_t s_mqtt_client = NULL;
 static bool s_connected = false;
+
+/* Richer connection status for diagnostics / UI (guarded by s_status_mutex) */
+static bool s_connecting = false;
+static char s_last_error[96] = {0};
+static int64_t s_last_error_uptime_s = 0;
+static SemaphoreHandle_t s_status_mutex = NULL;
+
+/**
+ * @brief Record a human-readable MQTT error from the ERROR event payload
+ */
+static void mqtt_record_error(const esp_mqtt_error_codes_t *e)
+{
+    char msg[sizeof(s_last_error)];
+
+    if (e == NULL) {
+        snprintf(msg, sizeof(msg), "Unknown error");
+    } else if (e->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+        if (e->esp_tls_last_esp_err == ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME) {
+            snprintf(msg, sizeof(msg), "Cannot resolve broker hostname (DNS)");
+        } else if (e->esp_transport_sock_errno != 0) {
+            snprintf(msg, sizeof(msg), "Network error: %s",
+                     strerror(e->esp_transport_sock_errno));
+        } else if (e->esp_tls_last_esp_err != 0) {
+            snprintf(msg, sizeof(msg), "Transport error: %s",
+                     esp_err_to_name(e->esp_tls_last_esp_err));
+        } else {
+            snprintf(msg, sizeof(msg), "Transport error (broker unreachable?)");
+        }
+    } else if (e->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+        switch (e->connect_return_code) {
+        case MQTT_CONNECTION_REFUSE_PROTOCOL:
+            snprintf(msg, sizeof(msg), "Broker refused: unacceptable protocol version");
+            break;
+        case MQTT_CONNECTION_REFUSE_ID_REJECTED:
+            snprintf(msg, sizeof(msg), "Broker refused: client ID rejected");
+            break;
+        case MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE:
+            snprintf(msg, sizeof(msg), "Broker refused: server unavailable");
+            break;
+        case MQTT_CONNECTION_REFUSE_BAD_USERNAME:
+            snprintf(msg, sizeof(msg), "Broker refused: bad username or password");
+            break;
+        case MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED:
+            snprintf(msg, sizeof(msg), "Broker refused: not authorized");
+            break;
+        default:
+            snprintf(msg, sizeof(msg), "Broker refused connection");
+            break;
+        }
+    } else if (e->error_type == MQTT_ERROR_TYPE_SUBSCRIBE_FAILED) {
+        snprintf(msg, sizeof(msg), "Subscribe failed");
+    } else {
+        snprintf(msg, sizeof(msg), "Unknown error");
+    }
+
+    if (s_status_mutex && xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        strncpy(s_last_error, msg, sizeof(s_last_error) - 1);
+        s_last_error[sizeof(s_last_error) - 1] = '\0';
+        s_last_error_uptime_s = esp_timer_get_time() / 1000000;
+        xSemaphoreGive(s_status_mutex);
+    }
+
+    ESP_LOGE(TAG, "MQTT error: %s", msg);
+}
 
 /* Forward declaration */
 extern const char *APP_VERSION;
@@ -41,9 +108,22 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     esp_mqtt_event_handle_t event = event_data;
     
     switch ((esp_mqtt_event_id_t)event_id) {
+    case MQTT_EVENT_BEFORE_CONNECT:
+        if (s_status_mutex && xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            s_connecting = true;
+            xSemaphoreGive(s_status_mutex);
+        }
+        break;
+
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "MQTT Connected to broker");
         s_connected = true;
+        if (s_status_mutex && xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            s_connecting = false;
+            s_last_error[0] = '\0';
+            s_last_error_uptime_s = 0;
+            xSemaphoreGive(s_status_mutex);
+        }
         
         /* Publish online status */
         mqtt_ha_publish_status(true);
@@ -105,13 +185,15 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "MQTT Disconnected");
         s_connected = false;
+        /* esp-mqtt auto-reconnects, so we remain in the "connecting" state */
+        if (s_status_mutex && xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            s_connecting = true;
+            xSemaphoreGive(s_status_mutex);
+        }
         break;
         
     case MQTT_EVENT_ERROR:
-        ESP_LOGE(TAG, "MQTT Error");
-        if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
-            ESP_LOGE(TAG, "Transport error: %s", strerror(event->error_handle->esp_transport_sock_errno));
-        }
+        mqtt_record_error(event->error_handle);
         break;
         
     case MQTT_EVENT_DATA:
@@ -232,6 +314,10 @@ esp_err_t mqtt_ha_init(void)
 {
     ESP_LOGD(TAG, "Initializing MQTT client");
 
+    if (s_status_mutex == NULL) {
+        s_status_mutex = xSemaphoreCreateMutex();
+    }
+
     /* Try to load config from NVS, fall back to menuconfig defaults */
     char broker_uri[128] = {0};
     char username[64] = {0};
@@ -294,6 +380,27 @@ esp_err_t mqtt_ha_stop(void)
 bool mqtt_ha_is_connected(void)
 {
     return s_connected;
+}
+
+void mqtt_ha_get_status(mqtt_ha_status_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+
+    out->connected = s_connected;
+
+    if (s_status_mutex && xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        out->connecting = s_connecting;
+        strncpy(out->last_error, s_last_error, sizeof(out->last_error) - 1);
+        out->last_error[sizeof(out->last_error) - 1] = '\0';
+        out->last_error_uptime_s = s_last_error_uptime_s;
+        xSemaphoreGive(s_status_mutex);
+    } else {
+        out->connecting = s_connecting;
+        out->last_error[0] = '\0';
+        out->last_error_uptime_s = 0;
+    }
 }
 
 esp_err_t mqtt_ha_publish_temperature(const char *sensor_id, const char *friendly_name, float temperature)

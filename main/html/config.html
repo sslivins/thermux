@@ -122,6 +122,20 @@
         }
         .status-connected { background: #22c55e; }
         .status-disconnected { background: #ef4444; }
+        .status-connecting {
+            background: #f59e0b;
+            animation: pulse-badge 1.4s ease-in-out infinite;
+        }
+        @keyframes pulse-badge {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.55; }
+        }
+        .mqtt-error-hint {
+            margin-top: 8px;
+            font-size: 0.82em;
+            color: #f59e0b;
+            display: none;
+        }
         .toast {
             position: fixed;
             bottom: 20px;
@@ -288,6 +302,7 @@
                 🔗 MQTT Configuration
                 <span id="mqtt-status" class="status-badge status-disconnected">Disconnected</span>
             </div>
+            <div id="mqtt-error-hint" class="mqtt-error-hint"></div>
             <form id="mqtt-form">
                 <div class="form-group">
                     <label for="mqtt-uri">Broker URI</label>
@@ -504,6 +519,51 @@
             return false;
         }
 
+        function formatAge(sec) {
+            if (sec === null || sec === undefined) return '';
+            sec = Math.max(0, Math.round(sec));
+            if (sec < 60) return sec + 's ago';
+            if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+            return Math.floor(sec / 3600) + 'h ago';
+        }
+
+        function updateMqttBadge(status) {
+            const badge = document.getElementById('mqtt-status');
+            const hint = document.getElementById('mqtt-error-hint');
+            if (status.mqtt_connected) {
+                badge.textContent = 'Connected';
+                badge.className = 'status-badge status-connected';
+            } else if (status.mqtt_connecting) {
+                badge.textContent = 'Reconnecting…';
+                badge.className = 'status-badge status-connecting';
+            } else {
+                badge.textContent = 'Disconnected';
+                badge.className = 'status-badge status-disconnected';
+            }
+
+            if (hint) {
+                if (!status.mqtt_connected && status.mqtt_last_error) {
+                    const age = formatAge(status.mqtt_last_error_age_sec);
+                    hint.textContent = '⚠ Last error: ' + status.mqtt_last_error + (age ? ' (' + age + ')' : '');
+                    hint.style.display = 'block';
+                } else {
+                    hint.textContent = '';
+                    hint.style.display = 'none';
+                }
+            }
+        }
+
+        async function pollMqttStatus() {
+            try {
+                const resp = await fetch('/api/status', {cache: 'no-store'});
+                if (!resp.ok) return;
+                const status = await resp.json();
+                updateMqttBadge(status);
+            } catch (e) {
+                /* Non-fatal: leave the badge as-is until the next poll */
+            }
+        }
+
         async function loadConfig() {
             try {
                 const statusResp = await fetch('/api/status', {cache: 'no-store'});
@@ -523,8 +583,7 @@
                 document.getElementById('mqtt-username').placeholder = mqtt.username || 'Username';
                 
                 const mqttBadge = document.getElementById('mqtt-status');
-                mqttBadge.textContent = status.mqtt_connected ? 'Connected' : 'Disconnected';
-                mqttBadge.className = 'status-badge ' + (status.mqtt_connected ? 'status-connected' : 'status-disconnected');
+                updateMqttBadge(status);
                 document.getElementById('fw-current-version').textContent = status.version;
 
                 /* Load OTA pre-release (beta) channel preference */
@@ -1399,6 +1458,7 @@
         loadConfig();
         loadLogLevel();
         loadAuthStatus();
+        setInterval(pollMqttStatus, 5000);
     </script>
 </body>
 </html>
