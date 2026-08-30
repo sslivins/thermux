@@ -8,6 +8,17 @@
 
 #include "esp_err.h"
 #include <stdbool.h>
+#include <stdint.h>
+
+/**
+ * @brief Snapshot of the MQTT connection status for diagnostics/UI
+ */
+typedef struct {
+    bool connected;              /*!< True once CONNECTED, false otherwise */
+    bool connecting;             /*!< True while an attempt is in flight / retrying */
+    char last_error[96];         /*!< Human-readable last connect error ("" if none) */
+    int64_t last_error_uptime_s; /*!< Device uptime (s) when last_error was recorded, 0 if none */
+} mqtt_ha_status_t;
 
 /**
  * @brief Initialize MQTT client
@@ -28,6 +39,12 @@ esp_err_t mqtt_ha_stop(void);
  * @brief Check if MQTT is connected
  */
 bool mqtt_ha_is_connected(void);
+
+/**
+ * @brief Get a snapshot of the current MQTT connection status
+ * @param out Pointer to a struct that receives the status (must not be NULL)
+ */
+void mqtt_ha_get_status(mqtt_ha_status_t *out);
 
 /**
  * @brief Publish temperature reading

@@ -72,6 +72,14 @@
         }
         .status-online { color: #4ade80; }
         .status-offline { color: #f87171; }
+        .status-connecting {
+            color: #fbbf24;
+            animation: pulse-text 1.4s ease-in-out infinite;
+        }
+        @keyframes pulse-text {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
         .sensors-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -410,8 +418,20 @@
                 if (checkAuthError(response)) return;
                 const status = await response.json();
                 document.getElementById('version').textContent = 'Version ' + status.version;
-                document.getElementById('mqtt-status').textContent = status.mqtt_connected ? 'Online' : 'Offline';
-                document.getElementById('mqtt-status').className = status.mqtt_connected ? 'status-online' : 'status-offline';
+                const mqttEl = document.getElementById('mqtt-status');
+                if (status.mqtt_connected) {
+                    mqttEl.textContent = 'Online';
+                    mqttEl.className = 'status-online';
+                    mqttEl.title = '';
+                } else if (status.mqtt_connecting) {
+                    mqttEl.textContent = 'Reconnecting…';
+                    mqttEl.className = 'status-connecting';
+                    mqttEl.title = status.mqtt_last_error || 'Attempting to connect';
+                } else {
+                    mqttEl.textContent = 'Offline';
+                    mqttEl.className = 'status-offline';
+                    mqttEl.title = status.mqtt_last_error || '';
+                }
                 document.getElementById('uptime').textContent = formatDuration(status.uptime_seconds);
                 /* Update bus error stats */
                 if (status.bus_stats) {

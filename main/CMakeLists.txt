@@ -63,6 +63,7 @@ idf_component_register(
         driver
         esp_partition
         esp_timer
+        esp-tls
     EMBED_FILES
         "${HTML_BUILD_DIR}/index.html.gz"
         "${HTML_BUILD_DIR}/config.html.gz"

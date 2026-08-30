@@ -11,6 +11,7 @@
 #include "wifi_manager.h"
 #include "ethernet_manager.h"
 #include "log_buffer.h"
+#include "mqtt_client_ha.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -329,6 +330,22 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     
     extern bool mqtt_ha_is_connected(void);
     cJSON_AddBoolToObject(root, "mqtt_connected", mqtt_ha_is_connected());
+
+    /* Richer MQTT status for the UI: distinguish "reconnecting" from a hard
+     * "disconnected", and surface the last connection error + its age. */
+    {
+        mqtt_ha_status_t mqtt_status;
+        mqtt_ha_get_status(&mqtt_status);
+        cJSON_AddBoolToObject(root, "mqtt_connecting", mqtt_status.connecting);
+        cJSON_AddStringToObject(root, "mqtt_last_error", mqtt_status.last_error);
+        if (mqtt_status.last_error_uptime_s > 0) {
+            int64_t now_s = esp_timer_get_time() / 1000000;
+            int64_t age = now_s - mqtt_status.last_error_uptime_s;
+            cJSON_AddNumberToObject(root, "mqtt_last_error_age_sec", age < 0 ? 0 : age);
+        } else {
+            cJSON_AddNullToObject(root, "mqtt_last_error_age_sec");
+        }
+    }
     
     /* Network connection status */
     bool eth_connected = ethernet_manager_is_connected();
