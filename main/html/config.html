@@ -290,7 +290,6 @@
                 <div class="form-group">
                     <label for="wifi-password">WiFi Password</label>
                     <input type="password" id="wifi-password" name="password" placeholder="••••••••" maxlength="63">
-                    <div class="form-hint">Leave blank to keep current password</div>
                 </div>
                 <button type="submit" class="btn btn-primary">💾 Save WiFi Settings</button>
             </form>
@@ -315,10 +314,8 @@
                 <div class="form-group">
                     <label for="mqtt-password">Password (optional)</label>
                     <input type="password" id="mqtt-password" name="password" placeholder="••••••••">
-                    <div class="form-hint">Leave blank to keep current password</div>
                 </div>
-                <button type="submit" class="btn btn-primary">💾 Save MQTT Settings</button>
-                <button type="button" class="btn btn-secondary" onclick="reconnectMqtt()">🔄 Reconnect</button>
+                <button type="submit" class="btn btn-primary" id="mqtt-save-btn">💾 Save MQTT Settings</button>
             </form>
         </div>
 
@@ -589,6 +586,9 @@
                  * dots placeholder signals "a password is set; blank keeps it". */
                 document.getElementById('mqtt-uri').value = mqtt.uri || '';
                 document.getElementById('mqtt-username').value = mqtt.username || '';
+                document.getElementById('mqtt-password').value = '';
+                mqttSavedBaseline = { uri: mqtt.uri || '', username: mqtt.username || '' };
+                updateMqttSaveState();
                 
                 const mqttBadge = document.getElementById('mqtt-status');
                 updateMqttBadge(status);
@@ -1102,14 +1102,26 @@
             } catch (err) { showToast('Error saving sensor settings', true); }
         });
 
-        async function reconnectMqtt() {
-            try {
-                showToast('Reconnecting MQTT...');
-                const resp = await fetch('/api/mqtt/reconnect', { method: 'POST' });
-                if (resp.ok) { showToast('MQTT reconnecting...'); setTimeout(loadConfig, 3000); }
-                else { showToast('Failed to reconnect', true); }
-            } catch (err) { showToast('Error reconnecting MQTT', true); }
+        /* Enable "Save MQTT Settings" only when something differs from the
+         * loaded config. A non-empty password always counts as a change
+         * (it's never echoed back, so any entry means "set this"). The
+         * button uses the shared .btn:disabled styling for the greyed-out
+         * look. */
+        let mqttSavedBaseline = { uri: '', username: '' };
+        function updateMqttSaveState() {
+            const uri = document.getElementById('mqtt-uri').value;
+            const username = document.getElementById('mqtt-username').value;
+            const password = document.getElementById('mqtt-password').value;
+            const dirty = uri !== mqttSavedBaseline.uri ||
+                          username !== mqttSavedBaseline.username ||
+                          password.length > 0;
+            const btn = document.getElementById('mqtt-save-btn');
+            if (btn) btn.disabled = !dirty;
         }
+        ['mqtt-uri', 'mqtt-username', 'mqtt-password'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.addEventListener('input', updateMqttSaveState);
+        });
 
         let logRefreshInterval = null;
 

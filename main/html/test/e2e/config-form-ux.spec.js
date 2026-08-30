@@ -59,4 +59,41 @@ test.describe('Config form current-value UX', () => {
         await expect(page.locator('#wifi-ssid')).toHaveValue('HomeNetwork');
         await expect(page.locator('#wifi-ssid option:checked')).toContainText('HomeNetwork (current)');
     });
+
+    test('Save MQTT button is disabled until something actually changes', async ({ page }) => {
+        mock = await startMockServer();
+        mock.state.mqtt.uri = 'mqtt://homeassistant.local:1883';
+        mock.state.mqtt.username = 'thermux';
+
+        await page.goto(`${mock.baseURL}/config`);
+        // Wait for the form to finish prefilling before asserting button state.
+        await expect(page.locator('#mqtt-uri')).toHaveValue('mqtt://homeassistant.local:1883');
+
+        const btn = page.locator('#mqtt-save-btn');
+        await expect(btn).toBeDisabled();
+
+        // Editing a field enables the button.
+        await page.locator('#mqtt-uri').fill('mqtt://homeassistant.local:1884');
+        await expect(btn).toBeEnabled();
+
+        // Reverting to the loaded value disables it again.
+        await page.locator('#mqtt-uri').fill('mqtt://homeassistant.local:1883');
+        await expect(btn).toBeDisabled();
+
+        // A password entry (never echoed) always counts as a change.
+        await page.locator('#mqtt-password').fill('secret');
+        await expect(btn).toBeEnabled();
+    });
+
+    test('"leave blank to keep current password" hints are removed (MQTT + WiFi)', async ({ page }) => {
+        mock = await startMockServer();
+        await page.goto(`${mock.baseURL}/config`);
+        await expect(page.getByText('Leave blank to keep current password')).toHaveCount(0);
+    });
+
+    test('the redundant MQTT Reconnect button is removed', async ({ page }) => {
+        mock = await startMockServer();
+        await page.goto(`${mock.baseURL}/config`);
+        await expect(page.getByRole('button', { name: /Reconnect/i })).toHaveCount(0);
+    });
 });
