@@ -758,6 +758,7 @@ static esp_err_t api_ota_status_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "update_available", update_available);
     cJSON_AddStringToObject(root, "current_version", APP_VERSION);
     cJSON_AddStringToObject(root, "latest_version", latest_version);
+    cJSON_AddBoolToObject(root, "latest_is_prerelease", ota_is_latest_prerelease());
     
     /* Download progress fields:
        update_state: 0=idle, 1=downloading, 2=complete (rebooting soon), -1=failed */
@@ -1320,6 +1321,13 @@ static esp_err_t api_config_mqtt_post_handler(httpd_req_t *req)
     esp_err_t err = nvs_storage_save_mqtt_config(uri_item->valuestring, username, password);
     cJSON_Delete(root);
     
+    /* Apply the new settings to the live client immediately so the device
+     * reconnects with the updated broker/credentials without needing a
+     * manual "Reconnect" click or a reboot. */
+    if (err == ESP_OK) {
+        mqtt_ha_reconnect();
+    }
+    
     cJSON *response = cJSON_CreateObject();
     cJSON_AddBoolToObject(response, "success", err == ESP_OK);
     if (err == ESP_OK) {
@@ -1344,10 +1352,8 @@ static esp_err_t api_mqtt_reconnect_handler(httpd_req_t *req)
     CHECK_AUTH(req);
     ESP_LOGD(TAG, "MQTT reconnect requested");
     
-    /* Stop and reinitialize MQTT with new settings */
-    mqtt_ha_stop();
-    mqtt_ha_init();
-    mqtt_ha_start();
+    /* Rebuild the client from saved settings and reconnect. */
+    mqtt_ha_reconnect();
     
     cJSON *response = cJSON_CreateObject();
     cJSON_AddBoolToObject(response, "success", true);

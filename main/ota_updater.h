@@ -43,6 +43,12 @@ int ota_get_check_result(void);
 bool ota_is_update_available(void);
 
 /**
+ * @brief Check whether the latest release found by the most recent check is
+ * a GitHub pre-release (beta). Only meaningful after a successful check.
+ */
+bool ota_is_latest_prerelease(void);
+
+/**
  * @brief Get latest available version string
  */
 esp_err_t ota_get_latest_version(char *version, size_t max_len);

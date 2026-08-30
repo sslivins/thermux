@@ -278,7 +278,6 @@
             <form id="wifi-form">
                 <div class="form-group">
                     <label for="wifi-ssid">WiFi Network Name (SSID)</label>
-                    <div class="current-value" id="wifi-ssid-current">Current: Loading...</div>
                     <div style="display: flex; gap: 10px; align-items: stretch;">
                         <select id="wifi-ssid" name="ssid" style="flex: 1;">
                             <option value="">-- Select a network or type below --</option>
@@ -290,7 +289,7 @@
                 </div>
                 <div class="form-group">
                     <label for="wifi-password">WiFi Password</label>
-                    <input type="password" id="wifi-password" name="password" placeholder="Enter WiFi password" maxlength="63">
+                    <input type="password" id="wifi-password" name="password" placeholder="••••••••" maxlength="63">
                     <div class="form-hint">Leave blank to keep current password</div>
                 </div>
                 <button type="submit" class="btn btn-primary">💾 Save WiFi Settings</button>
@@ -306,18 +305,16 @@
             <form id="mqtt-form">
                 <div class="form-group">
                     <label for="mqtt-uri">Broker URI</label>
-                    <div class="current-value" id="mqtt-uri-current">Current: Loading...</div>
                     <input type="text" id="mqtt-uri" name="uri" placeholder="mqtt://192.168.1.100:1883">
                     <div class="form-hint">Example: mqtt://host:1883 or mqtts://host:8883 for TLS</div>
                 </div>
                 <div class="form-group">
                     <label for="mqtt-username">Username (optional)</label>
-                    <div class="current-value" id="mqtt-user-current">Current: Loading...</div>
                     <input type="text" id="mqtt-username" name="username" placeholder="MQTT username">
                 </div>
                 <div class="form-group">
                     <label for="mqtt-password">Password (optional)</label>
-                    <input type="password" id="mqtt-password" name="password" placeholder="MQTT password">
+                    <input type="password" id="mqtt-password" name="password" placeholder="••••••••">
                     <div class="form-hint">Leave blank to keep current password</div>
                 </div>
                 <button type="submit" class="btn btn-primary">💾 Save MQTT Settings</button>
@@ -572,15 +569,26 @@
                 const wifiResp = await fetch('/api/config/wifi');
                 if (checkAuthError(wifiResp)) return;
                 const wifi = await wifiResp.json();
-                document.getElementById('wifi-ssid-current').textContent = 'Current: ' + (status.wifi_connected ? (wifi.ssid || 'Not set') : 'Disconnected');
-                document.getElementById('wifi-ssid').placeholder = wifi.ssid || 'Enter WiFi network name';
+                /* Show the current SSID directly in the dropdown (as a
+                 * selected option) instead of a separate "Current:" line. */
+                const wifiSsidSelect = document.getElementById('wifi-ssid');
+                if (wifi.ssid) {
+                    let opt = Array.from(wifiSsidSelect.options).find(o => o.value === wifi.ssid);
+                    if (!opt) {
+                        opt = new Option(wifi.ssid + ' (current)', wifi.ssid);
+                        wifiSsidSelect.add(opt, wifiSsidSelect.options[1] || null);
+                    }
+                    wifiSsidSelect.value = wifi.ssid;
+                }
 
                 const mqttResp = await fetch('/api/config/mqtt', {cache: 'no-store'});
                 const mqtt = await mqttResp.json();
-                document.getElementById('mqtt-uri-current').textContent = 'Current: ' + (mqtt.uri || 'Not set');
-                document.getElementById('mqtt-user-current').textContent = 'Current: ' + (mqtt.username || 'None');
-                document.getElementById('mqtt-uri').placeholder = mqtt.uri || 'mqtt://host:1883';
-                document.getElementById('mqtt-username').placeholder = mqtt.username || 'Username';
+                /* Prefill the actual current values in the inputs (edit-in-place)
+                 * rather than showing a redundant "Current:" line plus a ghost
+                 * placeholder. Password is never echoed - an empty field with a
+                 * dots placeholder signals "a password is set; blank keeps it". */
+                document.getElementById('mqtt-uri').value = mqtt.uri || '';
+                document.getElementById('mqtt-username').value = mqtt.username || '';
                 
                 const mqttBadge = document.getElementById('mqtt-status');
                 updateMqttBadge(status);
@@ -730,12 +738,14 @@
                         clearInterval(pollInterval);
 
                         if (status.result === 1) {
-                            latestVersion.textContent = status.latest_version || 'Unknown';
+                            const betaSuffix = status.latest_is_prerelease ? ' (beta)' : '';
+                            const latestLabel = (status.latest_version || 'Unknown') + betaSuffix;
+                            latestVersion.textContent = latestLabel;
                             document.getElementById('fw-current-version').textContent = status.current_version;
 
                             if (status.update_available) {
                                 updateAvailable = true;
-                                showStatus('✓ Update available: ' + status.latest_version, 'available');
+                                showStatus('✓ Update available: ' + latestLabel, 'available');
                             } else {
                                 updateAvailable = false;
                                 showStatus('✓ You are running the latest version', 'current');

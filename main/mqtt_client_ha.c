@@ -314,6 +314,15 @@ esp_err_t mqtt_ha_init(void)
 {
     ESP_LOGD(TAG, "Initializing MQTT client");
 
+    /* If re-initializing (e.g. after a live config change or a manual
+     * reconnect), tear down the previous client first so its handle isn't
+     * leaked and no stale connection lingers with the old settings. */
+    if (s_mqtt_client != NULL) {
+        esp_mqtt_client_stop(s_mqtt_client);
+        esp_mqtt_client_destroy(s_mqtt_client);
+        s_mqtt_client = NULL;
+    }
+
     if (s_status_mutex == NULL) {
         s_status_mutex = xSemaphoreCreateMutex();
     }
@@ -375,6 +384,23 @@ esp_err_t mqtt_ha_stop(void)
     }
     mqtt_ha_publish_status(false);
     return esp_mqtt_client_stop(s_mqtt_client);
+}
+
+esp_err_t mqtt_ha_reconnect(void)
+{
+    /* Reflect the in-progress state immediately so the UI shows
+     * "Reconnecting..." right away rather than waiting for the first
+     * connect attempt/failure. */
+    s_connected = false;
+    if (s_status_mutex && xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        s_connecting = true;
+        xSemaphoreGive(s_status_mutex);
+    }
+
+    /* Re-init tears down the old client and rebuilds it from the latest
+     * NVS config, then starts it - so changed broker/credentials take
+     * effect without a reboot. */
+    return mqtt_ha_init();
 }
 
 bool mqtt_ha_is_connected(void)

@@ -47,6 +47,7 @@ static char s_latest_version[32] = {0};
 static char s_download_url[512] = {0};
 static bool s_update_available = false;
 static bool s_include_prerelease = false;
+static bool s_latest_is_prerelease = false;
 
 /* Async check state */
 typedef enum {
@@ -270,7 +271,14 @@ static esp_err_t ota_check_for_update_internal(void)
 
                 cJSON *tag_name = release ? cJSON_GetObjectItem(release, "tag_name") : NULL;
                 cJSON *assets = release ? cJSON_GetObjectItem(release, "assets") : NULL;
-                
+                cJSON *prerelease = release ? cJSON_GetObjectItem(release, "prerelease") : NULL;
+
+                /* Record whether the selected release is a GitHub pre-release
+                 * (beta) so the UI can label it clearly. In stable mode this
+                 * is always false (GitHub's /releases/latest never returns a
+                 * pre-release); in beta mode it reflects the picked release. */
+                s_latest_is_prerelease = cJSON_IsTrue(prerelease);
+
                 if (cJSON_IsString(tag_name)) {
                     strncpy(s_latest_version, tag_name->valuestring, sizeof(s_latest_version) - 1);
                     s_latest_version[sizeof(s_latest_version) - 1] = '\0';  /* Ensure null termination */
@@ -441,6 +449,7 @@ esp_err_t ota_check_for_update_async(void)
     /* Reset state for new check */
     s_check_state = OTA_CHECK_IN_PROGRESS;
     s_update_available = false;
+    s_latest_is_prerelease = false;
     s_latest_version[0] = '\0';
     
     /* Create task with 8KB stack - enough for HTTPS + TLS */
@@ -476,6 +485,11 @@ int ota_get_check_result(void)
 bool ota_is_update_available(void)
 {
     return s_update_available;
+}
+
+bool ota_is_latest_prerelease(void)
+{
+    return s_latest_is_prerelease;
 }
 
 esp_err_t ota_get_latest_version(char *version, size_t max_len)

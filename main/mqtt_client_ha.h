@@ -36,6 +36,13 @@ esp_err_t mqtt_ha_start(void);
 esp_err_t mqtt_ha_stop(void);
 
 /**
+ * @brief Tear down and re-create the MQTT client from the latest saved
+ * config, then start it. Applies changed broker/credentials without a
+ * reboot and forces an immediate reconnect attempt.
+ */
+esp_err_t mqtt_ha_reconnect(void);
+
+/**
  * @brief Check if MQTT is connected
  */
 bool mqtt_ha_is_connected(void);
