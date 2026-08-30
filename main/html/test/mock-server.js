@@ -60,6 +60,18 @@ function defaultState() {
         authStatus: { auth_enabled: false, logged_in: true },
         logLevel: { level: 3, level_name: 'info' },
         otaChannel: { include_prerelease: false },
+        otaStatus: {
+            checking: false,
+            result: 1,
+            update_available: false,
+            current_version: '3.0.0',
+            latest_version: '3.0.0',
+            latest_is_prerelease: false,
+            update_state: 0,
+            download_progress: 0,
+            download_received: 0,
+            download_total: 0,
+        },
         backup: {
             schema_version: 1,
             device_version: '3.0.0',
@@ -164,8 +176,7 @@ function createMockServer() {
         if (req.method === 'GET' && url.pathname === '/api/ota/channel') {
             return sendJson(res, 200, state.otaChannel);
         }
-        if (req.method === 'POST' && url.pathname === '/api/ota/channel') {
-            let parsed;
+        if (req.method === 'POST' && url.pathname === '/api/ota/channel') {            let parsed;
             try {
                 parsed = JSON.parse(body);
             } catch {
@@ -210,6 +221,15 @@ function createMockServer() {
                 auth_restored: Boolean(parsed.auth),
                 message: 'Restore complete. Restarting...',
             });
+        }
+
+        if (req.method === 'POST' && url.pathname === '/api/ota/check') {
+            // The real firmware kicks off an async check; the UI then polls
+            // /api/ota/status. Report that the check has started.
+            return sendJson(res, 200, { checking: true });
+        }
+        if (req.method === 'GET' && url.pathname === '/api/ota/status') {
+            return sendJson(res, 200, state.otaStatus);
         }
 
         // Unimplemented endpoint - fail loudly instead of a silent 200, so a

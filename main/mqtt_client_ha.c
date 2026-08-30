@@ -18,6 +18,7 @@
 #include "esp_tls.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/timers.h"
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
@@ -33,6 +34,17 @@ static bool s_connecting = false;
 static char s_last_error[96] = {0};
 static int64_t s_last_error_uptime_s = 0;
 static SemaphoreHandle_t s_status_mutex = NULL;
+
+/* Custom reconnect backoff. esp-mqtt's built-in auto-reconnect only supports a
+ * fixed interval, so we disable it and drive reconnection ourselves with a
+ * one-shot timer whose delay doubles after each failed attempt (base -> cap).
+ * The delay resets to the base on a successful connect or a config change. */
+#define MQTT_RECONNECT_BASE_MS 1000
+#define MQTT_RECONNECT_MAX_MS  60000
+static TimerHandle_t s_reconnect_timer = NULL;
+static uint32_t s_reconnect_delay_ms = MQTT_RECONNECT_BASE_MS;
+static bool s_reconnect_scheduled = false;
+static bool s_stopping = false;  /* suppress reconnect scheduling during intentional stop/teardown */
 
 /**
  * @brief Record a human-readable MQTT error from the ERROR event payload
@@ -100,6 +112,69 @@ extern void set_sensor_read_interval(uint32_t ms);
 extern void set_sensor_publish_interval(uint32_t ms);
 
 /**
+ * @brief One-shot timer callback: fire a single reconnect attempt.
+ *
+ * Runs in the FreeRTOS timer service task. That task also processes the
+ * xTimerStop() we issue during teardown, so this callback cannot run
+ * concurrently with (or after) a stop that has been queued - which keeps it
+ * from touching a client that mqtt_ha_init() is destroying.
+ */
+static void mqtt_reconnect_timer_cb(TimerHandle_t timer)
+{
+    (void)timer;
+    s_reconnect_scheduled = false;
+    if (s_mqtt_client == NULL || s_connected || s_stopping) {
+        return;
+    }
+    ESP_LOGI(TAG, "MQTT reconnect attempt");
+    esp_mqtt_client_reconnect(s_mqtt_client);
+}
+
+/**
+ * @brief Arm the reconnect timer with the current backoff, then grow it.
+ */
+static void mqtt_schedule_reconnect(void)
+{
+    if (s_mqtt_client == NULL || s_stopping || s_reconnect_scheduled) {
+        return;
+    }
+    if (s_reconnect_timer == NULL) {
+        s_reconnect_timer = xTimerCreate("mqtt_recon",
+                                         pdMS_TO_TICKS(s_reconnect_delay_ms),
+                                         pdFALSE, NULL, mqtt_reconnect_timer_cb);
+        if (s_reconnect_timer == NULL) {
+            ESP_LOGE(TAG, "Failed to create MQTT reconnect timer");
+            return;
+        }
+    }
+
+    uint32_t delay = s_reconnect_delay_ms;
+    /* xTimerChangePeriod also starts a dormant timer. */
+    if (xTimerChangePeriod(s_reconnect_timer, pdMS_TO_TICKS(delay), 0) == pdPASS) {
+        s_reconnect_scheduled = true;
+        ESP_LOGI(TAG, "MQTT reconnect scheduled in %lu ms", (unsigned long)delay);
+    }
+
+    uint32_t next = s_reconnect_delay_ms * 2;
+    if (next > MQTT_RECONNECT_MAX_MS) {
+        next = MQTT_RECONNECT_MAX_MS;
+    }
+    s_reconnect_delay_ms = next;
+}
+
+/**
+ * @brief Cancel any pending reconnect and reset the backoff to its base.
+ */
+static void mqtt_reset_reconnect(void)
+{
+    if (s_reconnect_timer != NULL) {
+        xTimerStop(s_reconnect_timer, 0);
+    }
+    s_reconnect_scheduled = false;
+    s_reconnect_delay_ms = MQTT_RECONNECT_BASE_MS;
+}
+
+/**
  * @brief MQTT event handler
  */
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, 
@@ -118,6 +193,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "MQTT Connected to broker");
         s_connected = true;
+        mqtt_reset_reconnect();
         if (s_status_mutex && xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             s_connecting = false;
             s_last_error[0] = '\0';
@@ -185,11 +261,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "MQTT Disconnected");
         s_connected = false;
-        /* esp-mqtt auto-reconnects, so we remain in the "connecting" state */
+        /* We disable esp-mqtt's fixed auto-reconnect and drive it ourselves
+         * with an exponential backoff (unless this is an intentional stop). */
         if (s_status_mutex && xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             s_connecting = true;
             xSemaphoreGive(s_status_mutex);
         }
+        mqtt_schedule_reconnect();
         break;
         
     case MQTT_EVENT_ERROR:
@@ -268,13 +346,15 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             if (event->data_len > 0 && event->data_len < 16) {
                 char value_str[16] = {0};
                 memcpy(value_str, event->data, event->data_len);
-                long ms = atol(value_str);
+                /* HA sends the value in seconds (the entity's unit); convert
+                 * to the milliseconds the firmware works in. */
+                long ms = atol(value_str) * 1000;
 
                 if (event->topic_len == read_cmd_len &&
                     strncmp(event->topic, read_cmd_topic, read_cmd_len) == 0) {
                     if (ms < 5000) ms = 5000;
                     if (ms > 300000) ms = 300000;
-                    ESP_LOGI(TAG, "HA requested read interval: %ldms", ms);
+                    ESP_LOGI(TAG, "HA requested read interval: %ld ms", ms);
                     set_sensor_read_interval((uint32_t)ms);
                     nvs_storage_save_sensor_settings((uint32_t)ms, get_sensor_publish_interval(),
                                                      (uint8_t)onewire_temp_get_resolution());
@@ -283,7 +363,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
                           strncmp(event->topic, publish_cmd_topic, publish_cmd_len) == 0) {
                     if (ms < 5000) ms = 5000;
                     if (ms > 600000) ms = 600000;
-                    ESP_LOGI(TAG, "HA requested publish interval: %ldms", ms);
+                    ESP_LOGI(TAG, "HA requested publish interval: %ld ms", ms);
                     set_sensor_publish_interval((uint32_t)ms);
                     nvs_storage_save_sensor_settings(get_sensor_read_interval(), (uint32_t)ms,
                                                      (uint8_t)onewire_temp_get_resolution());
@@ -313,6 +393,21 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 esp_err_t mqtt_ha_init(void)
 {
     ESP_LOGD(TAG, "Initializing MQTT client");
+
+    /* Suppress reconnect scheduling and cancel any pending backoff timer while
+     * we tear down / rebuild the client, and reset the backoff to its base so
+     * a config change retries immediately. */
+    s_stopping = true;
+    mqtt_reset_reconnect();
+
+    /* If re-initializing (e.g. after a live config change or a manual
+     * reconnect), tear down the previous client first so its handle isn't
+     * leaked and no stale connection lingers with the old settings. */
+    if (s_mqtt_client != NULL) {
+        esp_mqtt_client_stop(s_mqtt_client);
+        esp_mqtt_client_destroy(s_mqtt_client);
+        s_mqtt_client = NULL;
+    }
 
     if (s_status_mutex == NULL) {
         s_status_mutex = xSemaphoreCreateMutex();
@@ -345,6 +440,8 @@ esp_err_t mqtt_ha_init(void)
         .session.last_will.msg_len = 7,
         .session.last_will.qos = 1,
         .session.last_will.retain = 1,
+        /* We manage reconnection ourselves (exponential backoff below). */
+        .network.disable_auto_reconnect = true,
     };
 
     s_mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
@@ -357,6 +454,7 @@ esp_err_t mqtt_ha_init(void)
                                    mqtt_event_handler, NULL);
 
     ESP_LOGD(TAG, "Starting MQTT client, broker: %s", broker_uri);
+    s_stopping = false;
     return esp_mqtt_client_start(s_mqtt_client);
 }
 
@@ -373,8 +471,28 @@ esp_err_t mqtt_ha_stop(void)
     if (s_mqtt_client == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
+    /* Intentional stop: cancel any pending reconnect so we stay down. */
+    s_stopping = true;
+    mqtt_reset_reconnect();
     mqtt_ha_publish_status(false);
     return esp_mqtt_client_stop(s_mqtt_client);
+}
+
+esp_err_t mqtt_ha_reconnect(void)
+{
+    /* Reflect the in-progress state immediately so the UI shows
+     * "Reconnecting..." right away rather than waiting for the first
+     * connect attempt/failure. */
+    s_connected = false;
+    if (s_status_mutex && xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        s_connecting = true;
+        xSemaphoreGive(s_status_mutex);
+    }
+
+    /* Re-init tears down the old client and rebuilds it from the latest
+     * NVS config, then starts it - so changed broker/credentials take
+     * effect without a reboot. */
+    return mqtt_ha_init();
 }
 
 bool mqtt_ha_is_connected(void)
@@ -866,8 +984,8 @@ static esp_err_t register_interval_number(const char *object_id,
                                           const char *name,
                                           const char *state_topic_suffix,
                                           const char *command_topic_suffix,
-                                          uint32_t min_ms,
-                                          uint32_t max_ms)
+                                          uint32_t min_s,
+                                          uint32_t max_s)
 {
     char discovery_topic[256];
     snprintf(discovery_topic, sizeof(discovery_topic),
@@ -893,10 +1011,10 @@ static esp_err_t register_interval_number(const char *object_id,
     snprintf(command_topic, sizeof(command_topic), "%s/%s", CONFIG_MQTT_BASE_TOPIC, command_topic_suffix);
     cJSON_AddStringToObject(root, "command_topic", command_topic);
 
-    cJSON_AddNumberToObject(root, "min", min_ms);
-    cJSON_AddNumberToObject(root, "max", max_ms);
-    cJSON_AddNumberToObject(root, "step", 1000);
-    cJSON_AddStringToObject(root, "unit_of_measurement", "ms");
+    cJSON_AddNumberToObject(root, "min", min_s);
+    cJSON_AddNumberToObject(root, "max", max_s);
+    cJSON_AddNumberToObject(root, "step", 1);
+    cJSON_AddStringToObject(root, "unit_of_measurement", "s");
     cJSON_AddStringToObject(root, "mode", "box");
     cJSON_AddStringToObject(root, "icon", "mdi:timer-cog-outline");
     cJSON_AddStringToObject(root, "entity_category", "config");
@@ -929,10 +1047,10 @@ esp_err_t mqtt_ha_register_interval_numbers(void)
 
     register_interval_number("read_interval", "Sensor Read Interval",
                              "read_interval/state", "read_interval/set",
-                             5000, 300000);
+                             5, 300);
     register_interval_number("publish_interval", "MQTT Publish Interval",
                              "publish_interval/state", "publish_interval/set",
-                             5000, 600000);
+                             5, 600);
 
     ESP_LOGD(TAG, "Registered read/publish interval numbers with HA");
     return ESP_OK;
@@ -950,11 +1068,15 @@ esp_err_t mqtt_ha_publish_interval_state(void)
     char payload[16];
     char topic[128];
 
-    snprintf(payload, sizeof(payload), "%lu", (unsigned long)get_sensor_read_interval());
+    /* Entities are exposed in seconds (the real granularity), so convert
+     * from the milliseconds the firmware stores internally. */
+    snprintf(payload, sizeof(payload), "%lu",
+             (unsigned long)((get_sensor_read_interval() + 500) / 1000));
     snprintf(topic, sizeof(topic), "%s/read_interval/state", CONFIG_MQTT_BASE_TOPIC);
     esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 1);
 
-    snprintf(payload, sizeof(payload), "%lu", (unsigned long)get_sensor_publish_interval());
+    snprintf(payload, sizeof(payload), "%lu",
+             (unsigned long)((get_sensor_publish_interval() + 500) / 1000));
     snprintf(topic, sizeof(topic), "%s/publish_interval/state", CONFIG_MQTT_BASE_TOPIC);
     esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 1);
 
