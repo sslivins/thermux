@@ -27,6 +27,7 @@ Houses the Olimex ESP32-POE-ISO with the Sensor Bus Hat plugged onto it.
 - `step/Thermux ESP32-POE-ISO Case.step` - STEP
 - `print/ESP32-POE-ISO Case - Base.3mf` - print-ready base
 - `print/ESP32-POE-ISO Case - Lid.3mf` - print-ready lid
+- `print/ESP32-POE-ISO Case - Lid - Bambu.3mf` - print-ready lid pre-configured for Bambu Studio / Bambu Lab printers
 
 ### Temperature Node (DS18B20 sensor node)
 
