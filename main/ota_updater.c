@@ -31,12 +31,16 @@ extern const char *APP_VERSION;
 #define GITHUB_API_URL_LATEST "https://api.github.com/repos/%s/%s/releases/latest"
 /* GitHub API URL for the release list (newest first), used when the
  * pre-release/beta channel is enabled so drafts+prereleases are visible.
- * Kept small (per_page=3) so the JSON response comfortably fits within a
- * single buffer-growth step (8KB -> 16KB -> 32KB) on this heap-constrained
- * device - per_page=5 produced a ~40KB response that failed to grow past
- * 32KB under normal heap fragmentation, silently breaking prerelease
- * update checks (latest_version stayed "unknown"). */
-#define GITHUB_API_URL_LIST "https://api.github.com/repos/%s/%s/releases?per_page=3"
+ * Kept small (per_page=2) so both the raw JSON response AND the cJSON parse
+ * tree fit within available heap on this memory-constrained device. Each
+ * GitHub release object is large (~9KB: full assets[] array where every
+ * asset embeds a complete uploader user object). per_page=3 produced a
+ * ~28KB response whose cJSON_Parse intermittently failed under heap
+ * fragmentation (buffer grew fine, but the parse tree allocation ran out),
+ * breaking prerelease update checks with "Failed to parse JSON response".
+ * per_page=2 (~18KB) keeps a single draft-skip fallback slot while staying
+ * close to the known-good ~9KB /releases/latest path. */
+#define GITHUB_API_URL_LIST "https://api.github.com/repos/%s/%s/releases?per_page=2"
 /* Initial response buffer; grows dynamically as data arrives. The GitHub
  * /releases/latest payload is ~8KB and grows with asset count and release
  * notes length, so a fixed buffer truncated the JSON and broke parsing. */
