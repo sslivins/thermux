@@ -3,6 +3,8 @@
  * @brief Read-only Modbus TCP server (esp-modbus glue, settings, slot table)
  *
  * Locking:
+ *  - s_update_lock serializes register-image rebuilds and slot-table saves,
+ *    so a slower rebuild can never overwrite a newer table or image.
  *  - s_life_lock serializes start/stop/restart and register-image updates.
  *  - s_state_lock guards the slot table, settings and status fields; only
  *    held for short copies (never across NVS, network or esp-modbus calls).
@@ -20,10 +22,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"
 #include "mbcontroller.h"
 #include "mdns.h"
 #include "nvs.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +46,9 @@ static const char *TAG = "modbus";
 
 #define LIFE_LOCK_TIMEOUT_MS  3000
 #define DRAIN_WAIT_MS         500
+#define LISTEN_CHECK_TRIES    10
+#define LISTEN_CHECK_STEP_MS  100
+#define WATCHDOG_PERIOD_MS    30000
 
 extern uint32_t get_sensor_read_interval(void);
 
@@ -51,6 +58,7 @@ extern uint32_t get_sensor_read_interval(void);
  * client's unit ID is echoed back. */
 #define MBAP_UID_BEFORE_PDU 1
 
+static SemaphoreHandle_t s_update_lock;
 static SemaphoreHandle_t s_life_lock;
 static SemaphoreHandle_t s_state_lock;
 
@@ -76,6 +84,7 @@ static int64_t s_last_request_ms;
 static int s_without_slot;
 static uint8_t s_mac[6];
 static uint16_t s_fw_version[3];
+static int64_t s_next_watchdog_ms;
 
 static inline int64_t uptime_ms(void) { return esp_timer_get_time() / 1000; }
 
@@ -258,6 +267,43 @@ static mb_exception_t fc04_uid_guard(void *inst, uint8_t *frame, uint16_t *len)
     return s_default_fc04(inst, frame, len);
 }
 
+/* esp-modbus opens its listening socket later, in its own task, and gives up
+ * silently after two failed binds, so mbc_slave_start() succeeding does not
+ * mean clients can connect. Check by binding the port ourselves without
+ * SO_REUSEADDR: EADDRINUSE means a listener (or a live connection) holds it.
+ * Any other failure is treated as "present" so we never restart on doubt. */
+static bool listener_present(uint16_t port)
+{
+    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock < 0) {
+        return true;
+    }
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(port),
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+    };
+    bool present = true;
+    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+        present = false;
+    } else if (errno != EADDRINUSE) {
+        ESP_LOGD(TAG, "Listener check on port %u: errno %d", port, errno);
+    }
+    close(sock);
+    return present;
+}
+
+static bool wait_for_listener(uint16_t port)
+{
+    for (int i = 0; i < LISTEN_CHECK_TRIES; i++) {
+        vTaskDelay(pdMS_TO_TICKS(LISTEN_CHECK_STEP_MS));
+        if (listener_present(port)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static esp_err_t start_locked(const modbus_config_t *cfg)
 {
     mb_communication_info_t comm;
@@ -326,6 +372,13 @@ static esp_err_t start_locked(const modbus_config_t *cfg)
     }
 
     s_handle = handle;
+
+    if (!wait_for_listener(cfg->port)) {
+        ESP_LOGE(TAG, "Modbus TCP server could not open port %u", cfg->port);
+        stop_locked();
+        return ESP_FAIL;
+    }
+
     mdns_advertise(cfg);
 
     state_lock();
@@ -352,11 +405,15 @@ static void set_last_error(esp_err_t err, const modbus_config_t *cfg)
 
 /* ---- Register image ------------------------------------------------------ */
 
-void modbus_server_update(void)
+/* Rebuild the register image. Saves the slot table when @p force_save is set
+ * or new sensors were given slots. Returns the save result. */
+static esp_err_t update_image(bool force_save)
 {
     if (s_life_lock == NULL) {
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
+    xSemaphoreTake(s_update_lock, portMAX_DELAY);
+    esp_err_t save_err = ESP_OK;
 
     int count = 0;
     managed_sensor_t *snap = sensor_manager_snapshot(&count);
@@ -374,7 +431,8 @@ void modbus_server_update(void)
         free(snap);
         free(inputs);
         free(roms);
-        return;
+        xSemaphoreGive(s_update_lock);
+        return ESP_ERR_NO_MEM;
     }
     for (int i = 0; i < count; i++) {
         const managed_sensor_t *s = &snap[i];
@@ -391,6 +449,7 @@ void modbus_server_update(void)
     modbus_regs_t *image = malloc(sizeof(*image));
     if (table == NULL || image == NULL) {
         ESP_LOGE(TAG, "Out of memory building the register image");
+        save_err = ESP_ERR_NO_MEM;
         goto out;
     }
 
@@ -405,7 +464,9 @@ void modbus_server_update(void)
 
     if (newly > 0) {
         ESP_LOGI(TAG, "Assigned Modbus slots to %d new sensor(s)", newly);
-        save_slots(table);
+    }
+    if (newly > 0 || force_save) {
+        save_err = save_slots(table);
     }
     if (full_changed && left_over > 0) {
         ESP_LOGW(TAG, "Modbus slot table is full: %d sensor(s) have no slot", left_over);
@@ -448,6 +509,151 @@ out:
     free(image);
     free(inputs);
     free(roms);
+    xSemaphoreGive(s_update_lock);
+    return save_err;
+}
+
+/* Restart the server if it should be running but clients can't connect:
+ * either the listener vanished or an earlier start failed. */
+static void listener_watchdog(void)
+{
+    int64_t now = uptime_ms();
+    if (now < s_next_watchdog_ms) {
+        return;
+    }
+    s_next_watchdog_ms = now + WATCHDOG_PERIOD_MS;
+
+    if (xSemaphoreTake(s_life_lock, pdMS_TO_TICKS(LIFE_LOCK_TIMEOUT_MS)) != pdTRUE) {
+        return;
+    }
+    state_lock();
+    modbus_config_t cfg = s_cfg;
+    bool running = s_running;
+    state_unlock();
+
+    if (cfg.enabled && (!running || !listener_present(cfg.port))) {
+        ESP_LOGW(TAG, "Modbus TCP server not accepting connections on port %u; restarting",
+                 cfg.port);
+        stop_locked();
+        esp_err_t err = start_locked(&cfg);
+        set_last_error(err, &cfg);
+    }
+    xSemaphoreGive(s_life_lock);
+}
+
+void modbus_server_update(void)
+{
+    update_image(false);
+    if (s_life_lock != NULL) {
+        listener_watchdog();
+    }
+}
+
+/* ---- Slot management ------------------------------------------------------- */
+
+void modbus_server_get_slots(modbus_slot_table_t *out)
+{
+    if (s_state_lock == NULL) {
+        memset(out, 0, sizeof(*out));
+        return;
+    }
+    state_lock();
+    *out = s_slots;
+    state_unlock();
+}
+
+void modbus_server_get_slot_regs(uint16_t status[MODBUS_SLOT_COUNT],
+                                 uint16_t temp[MODBUS_SLOT_COUNT],
+                                 uint16_t rom[MB_REG_ROM_COUNT])
+{
+    /* s_regs is only written under s_life_lock */
+    bool locked = s_life_lock != NULL &&
+                  xSemaphoreTake(s_life_lock, pdMS_TO_TICKS(LIFE_LOCK_TIMEOUT_MS)) == pdTRUE;
+    memcpy(status, s_regs.status, sizeof(s_regs.status));
+    memcpy(temp, s_regs.temp, sizeof(s_regs.temp));
+    memcpy(rom, s_regs.rom, sizeof(s_regs.rom));
+    if (locked) {
+        xSemaphoreGive(s_life_lock);
+    }
+}
+
+esp_err_t modbus_server_move_slot(int from, int to, modbus_slot_op_t *op)
+{
+    if (s_state_lock == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    state_lock();
+    modbus_slot_op_t res = modbus_slots_move_sensor(&s_slots, from, to);
+    state_unlock();
+    if (op) {
+        *op = res;
+    }
+    if (res != MB_SLOT_OP_OK) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ESP_LOGI(TAG, "Moved Modbus slot %d to %d", from, to);
+    return update_image(true);
+}
+
+esp_err_t modbus_server_release_slot(int slot, modbus_slot_op_t *op)
+{
+    if (s_state_lock == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    int count = 0;
+    managed_sensor_t *snap = sensor_manager_snapshot(&count);
+    uint8_t (*present)[MODBUS_ROM_LEN] = NULL;
+    if (count > 0 && snap != NULL) {
+        present = malloc((size_t)count * MODBUS_ROM_LEN);
+        if (present == NULL) {
+            free(snap);
+            return ESP_ERR_NO_MEM;
+        }
+        for (int i = 0; i < count; i++) {
+            memcpy(present[i], snap[i].hw_sensor.address, MODBUS_ROM_LEN);
+        }
+    } else {
+        count = 0;
+    }
+    free(snap);
+
+    state_lock();
+    modbus_slot_op_t res = modbus_slots_release_missing(
+        &s_slots, slot, (const uint8_t (*)[MODBUS_ROM_LEN])present, count);
+    state_unlock();
+    free(present);
+    if (op) {
+        *op = res;
+    }
+    if (res != MB_SLOT_OP_OK) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ESP_LOGI(TAG, "Released Modbus slot %d", slot);
+    return update_image(true);
+}
+
+esp_err_t modbus_server_restore(const modbus_config_t *cfg, const modbus_slot_table_t *slots)
+{
+    if (s_state_lock == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = ESP_OK;
+    if (cfg != NULL) {
+        if (!modbus_config_valid(cfg->port, cfg->unit_id, CONFIG_WEB_SERVER_PORT)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        err = save_config(cfg);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    if (slots != NULL) {
+        state_lock();
+        s_slots = *slots;
+        state_unlock();
+        err = update_image(true);
+    }
+    return err;
 }
 
 /* ---- Public API ------------------------------------------------------------ */
@@ -455,9 +661,10 @@ out:
 esp_err_t modbus_server_init(void)
 {
     if (s_life_lock == NULL) {
+        s_update_lock = xSemaphoreCreateMutex();
         s_life_lock = xSemaphoreCreateMutex();
         s_state_lock = xSemaphoreCreateMutex();
-        if (s_life_lock == NULL || s_state_lock == NULL) {
+        if (s_update_lock == NULL || s_life_lock == NULL || s_state_lock == NULL) {
             return ESP_ERR_NO_MEM;
         }
     }
@@ -480,7 +687,8 @@ esp_err_t modbus_server_init(void)
     free(table);
 
     /* Fill the image before anyone can connect */
-    modbus_server_update();
+    update_image(false);
+    s_next_watchdog_ms = uptime_ms() + WATCHDOG_PERIOD_MS;
 
     if (!cfg.enabled) {
         ESP_LOGI(TAG, "Modbus TCP server disabled");
@@ -530,15 +738,18 @@ esp_err_t modbus_server_apply_config(const modbus_config_t *cfg)
             set_last_error(ESP_OK, cfg);
         }
     }
+    /* Update the settings before releasing s_life_lock, so the listener
+     * watchdog never acts on the old settings */
+    if (err == ESP_OK) {
+        state_lock();
+        s_cfg = *cfg;
+        state_unlock();
+    }
     xSemaphoreGive(s_life_lock);
 
     if (err != ESP_OK) {
         return err;
     }
-
-    state_lock();
-    s_cfg = *cfg;
-    state_unlock();
     return save_config(cfg);
 }
 

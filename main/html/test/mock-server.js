@@ -75,6 +75,8 @@ function defaultState() {
         },
         /** When set, POST /api/modbus fails with this message (simulates a port that won't bind) */
         modbusFailMessage: null,
+        /** Assigned Modbus slots, as returned by GET /api/modbus/slots */
+        modbusSlots: [],
         otaStatus: {
             checking: false,
             result: 1,
@@ -88,10 +90,11 @@ function defaultState() {
             download_total: 0,
         },
         backup: {
-            schema_version: 1,
+            schema_version: 2,
             device_version: '3.0.0',
             sensor_names: [],
             sensor_settings: { read_interval_ms: 10000, publish_interval_ms: 30000, resolution: 12 },
+            modbus: { enabled: false, port: 502, unit_id: 1, slots: [] },
         },
     };
 }
@@ -197,6 +200,41 @@ function createMockServer() {
             if (typeof parsed.unit_id === 'number') state.modbus.unit_id = parsed.unit_id;
             state.modbus.running = state.modbus.enabled;
             return sendJson(res, 200, { success: true, message: 'Modbus settings saved', ...state.modbus });
+        }
+        if (req.method === 'GET' && url.pathname === '/api/modbus/slots') {
+            return sendJson(res, 200, { slot_capacity: 100, slots: state.modbusSlots });
+        }
+        if (req.method === 'POST' && url.pathname === '/api/modbus/slots') {
+            let parsed;
+            try {
+                parsed = JSON.parse(body);
+            } catch {
+                return sendJson(res, 400, { error: 'Invalid JSON' });
+            }
+            const reply = (status, success, message) => sendJson(res, status, {
+                success, message, slot_capacity: 100, slots: state.modbusSlots,
+            });
+            if (parsed.action === 'move') {
+                const src = state.modbusSlots.find((s) => s.slot === parsed.from);
+                if (!src) return reply(400, false, `Slot ${parsed.from} has no sensor`);
+                const dst = state.modbusSlots.find((s) => s.slot === parsed.to);
+                if (dst) {
+                    dst.slot = parsed.from;
+                    dst.temp_register = 100 + parsed.from;
+                }
+                src.slot = parsed.to;
+                src.temp_register = 100 + parsed.to;
+                state.modbusSlots.sort((a, b) => a.slot - b.slot);
+                return reply(200, true, `Moved slot ${parsed.from} to slot ${parsed.to}`);
+            }
+            if (parsed.action === 'release') {
+                const s = state.modbusSlots.find((x) => x.slot === parsed.slot);
+                if (!s) return reply(400, false, `Slot ${parsed.slot} has no sensor`);
+                if (s.present) return reply(400, false, 'That sensor is still connected; only missing sensors can be released');
+                state.modbusSlots = state.modbusSlots.filter((x) => x !== s);
+                return reply(200, true, `Released slot ${parsed.slot}`);
+            }
+            return reply(400, false, 'Action must be "move" or "release"');
         }
         if (req.method === 'GET' && url.pathname === '/api/config/auth') {
             return sendJson(res, 200, state.auth);

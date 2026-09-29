@@ -4,8 +4,9 @@ info:
   description: |
     REST API for the Thermux multi-sensor temperature monitoring system.
     
-    Thermux is an ESP32-based temperature monitoring system that supports up to 20 DS18B20 sensors
-    with Home Assistant integration via MQTT auto-discovery.
+    Thermux is an ESP32-based temperature monitoring system that supports up to 100 DS18B20 sensors
+    (20 by default) with Home Assistant integration via MQTT auto-discovery and an optional
+    read-only Modbus TCP server.
     
     ## Authentication
     
@@ -40,6 +41,8 @@ tags:
     description: Temperature sensor management
   - name: Configuration
     description: Device configuration endpoints
+  - name: Modbus
+    description: Modbus TCP server settings and sensor slots
   - name: Authentication
     description: Login, logout, and session management
   - name: OTA
@@ -710,6 +713,156 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /api/modbus:
+    get:
+      tags:
+        - Modbus
+      summary: Get Modbus TCP settings and state
+      operationId: getModbus
+      security:
+        - sessionCookie: []
+        - apiKey: []
+      responses:
+        '200':
+          description: Modbus settings and runtime state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModbusStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags:
+        - Modbus
+      summary: Change Modbus TCP settings
+      description: |
+        Omitted fields keep their current value. The server restarts if needed. Settings are only
+        saved if the server starts with them; otherwise the previous settings are kept and a 500
+        is returned.
+      operationId: setModbus
+      security:
+        - sessionCookie: []
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                port:
+                  type: integer
+                  minimum: 1
+                  maximum: 65535
+                  description: Any port except the web server's
+                unit_id:
+                  type: integer
+                  minimum: 1
+                  maximum: 247
+            example:
+              enabled: true
+              port: 502
+              unit_id: 1
+      responses:
+        '200':
+          description: Settings applied and saved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - $ref: '#/components/schemas/ModbusStatus'
+        '400':
+          description: Invalid port or unit ID
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: The server couldn't start with the new settings; previous settings kept
+
+  /api/modbus/slots:
+    get:
+      tags:
+        - Modbus
+      summary: List Modbus sensor slots
+      description: Assigned slots with the status and temperature Modbus clients currently read.
+      operationId: getModbusSlots
+      security:
+        - sessionCookie: []
+        - apiKey: []
+      responses:
+        '200':
+          description: Assigned slots
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModbusSlotList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags:
+        - Modbus
+      summary: Move or release a slot
+      description: |
+        `move` puts the sensor in `from` into `to`; if `to` is in use, the two sensors swap.
+        `release` frees the slot of a sensor that is no longer connected; slots of connected
+        sensors can't be released. Changes are saved and applied to the registers immediately.
+      operationId: changeModbusSlot
+      security:
+        - sessionCookie: []
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [action, from, to]
+                  properties:
+                    action:
+                      const: move
+                    from:
+                      type: integer
+                      minimum: 0
+                      maximum: 99
+                    to:
+                      type: integer
+                      minimum: 0
+                      maximum: 99
+                - type: object
+                  required: [action, slot]
+                  properties:
+                    action:
+                      const: release
+                    slot:
+                      type: integer
+                      minimum: 0
+                      maximum: 99
+            examples:
+              move:
+                value: { action: move, from: 0, to: 10 }
+              release:
+                value: { action: release, slot: 4 }
+      responses:
+        '200':
+          description: Change applied; returns the updated slot list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - $ref: '#/components/schemas/ModbusSlotList'
+        '400':
+          description: |
+            Refused (bad slot number, empty source slot, connected sensor, unknown action).
+            `message` says why; the unchanged slot list is included.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: The slot table couldn't be saved
+
   /api/wifi/scan:
     get:
       tags:
@@ -1221,6 +1374,94 @@ components:
           type: integer
           description: Number of failed reads for this sensor (CRC errors, etc.)
           example: 0
+        modbus_slot:
+          anyOf:
+            - type: integer
+            - type: "null"
+          description: Modbus slot (0-99) assigned to this sensor, or null if it has none
+          example: 3
+
+    ModbusStatus:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        port:
+          type: integer
+          example: 502
+        unit_id:
+          type: integer
+          example: 1
+        running:
+          type: boolean
+        error:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: Why the server couldn't start, or null
+        requests:
+          type: integer
+          description: Register reads served since the server started
+        last_request_age_s:
+          anyOf:
+            - type: integer
+            - type: "null"
+        map_version:
+          type: integer
+          example: 1
+        slot_capacity:
+          type: integer
+          example: 100
+        slots_assigned:
+          type: integer
+        sensors_without_slot:
+          type: integer
+          description: Connected sensors with no slot because all 100 are in use
+
+    ModbusSlot:
+      type: object
+      properties:
+        slot:
+          type: integer
+          example: 3
+        temp_register:
+          type: integer
+          description: Input register holding this slot's temperature (100 + slot)
+          example: 103
+        address:
+          type: string
+          description: ROM ID of the sensor in this slot
+          example: "28FF1234567890AB"
+        name:
+          anyOf:
+            - type: string
+            - type: "null"
+          example: "Supply"
+        present:
+          type: boolean
+          description: Whether the sensor was found in the latest bus scan
+        status:
+          type: string
+          enum: [ok, missing, read_error, stale]
+          description: Status Modbus clients currently read for this slot
+        temperature:
+          anyOf:
+            - type: number
+            - type: "null"
+          description: Temperature Modbus clients currently read, or null when the status isn't ok
+          example: 21.5
+
+    ModbusSlotList:
+      type: object
+      properties:
+        slot_capacity:
+          type: integer
+          example: 100
+        slots:
+          type: array
+          description: Assigned slots only, in slot order
+          items:
+            $ref: '#/components/schemas/ModbusSlot'
 
     SensorConfig:
       type: object

@@ -7,6 +7,7 @@ A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assi
 - **Up to 100 DS18B20 Sensors** - Monitor multiple temperature points from a single device on one 1-Wire bus (20 by default; raise `CONFIG_MAX_SENSORS` in menuconfig, max 100)
 - **Optimized Parallel Reads** - Uses 1-Wire skip ROM command to read all sensors simultaneously (~1050ms for 20 sensors in 12-bit mode, ~450ms in 9-bit)
 - **Home Assistant Integration** - MQTT auto-discovery for seamless integration
+- **Modbus TCP** - Optional read-only Modbus TCP server so PLCs and heat pump controllers can read temperatures directly (see [Modbus TCP](#modbus-tcp))
 - **Web Interface** - Configuration and monitoring via built-in web server
 - **Sensor Identification** - Change detection highlighting helps identify which physical sensor is which
 - **Custom Sensor Names** - Assign friendly names to sensors via web UI (persisted in NVS)
@@ -138,6 +139,110 @@ rest:
         value_template: "{{ value_json[0].temperature }}"
         unit_of_measurement: "°C"
         device_class: temperature
+```
+
+## Modbus TCP
+
+Thermux can run a small, **read-only** Modbus TCP server so a PLC or heat pump controller can read temperatures without HTTP or JSON. It's off by default: turn it on under **Settings → Modbus TCP**, where you can also set the port (default 502) and unit ID (default 1).
+
+Modbus has no password. Anyone on the network can read the registers, but nothing can be changed over Modbus, so only enable it on a network you trust.
+
+### Sensor slots
+
+Each sensor gets a **slot** (0–99) the first time it's seen, keyed by its ROM ID. A sensor keeps its slot when other sensors are added or removed, so a register address always refers to the same physical sensor. New sensors fill the lowest free slots, in ROM ID order.
+
+The slot table on the settings page shows each slot's register, sensor, and the status and temperature Modbus clients are currently reading. From there you can:
+
+- **Move** a sensor to another slot. If that slot is in use, the two sensors swap.
+- **Release** the slot of a sensor that has been disconnected, so the slot can be reused. Slots of connected sensors can't be released; they would just be reassigned on the next read.
+
+Slots and Modbus settings are included in backups (**Settings → Backup**), so a replacement Thermux can serve the same register map.
+
+### Register map
+
+All registers are **input registers**, read with function code 04. Addresses are zero-based. All 100 slots are always mapped, whatever `CONFIG_MAX_SENSORS` is set to, so the map never changes between builds.
+
+| Address | Contents |
+|---------|----------|
+| 0 | Map version (currently 1) |
+| 1–3 | Firmware version: major, minor, patch |
+| 4 | Slot capacity (always 100) |
+| 5 | Read-cycle counter. Goes up by one after every scheduled read attempt, including failed ones; wraps at 65535 |
+| 6–7 | Uptime in seconds (32-bit, register 6 is the high word) |
+| 8–10 | Ethernet MAC address, two bytes per register (register 8 = byte 0 << 8 \| byte 1) |
+| 11 | Firmware sensor limit (`CONFIG_MAX_SENSORS`) |
+| 12 | Number of slots in use |
+| 13 | Number of sensors found on the bus |
+| 14 | Result of the last read cycle: 0 OK, 1 some sensors failed, 2 bus failure, 3 no sensors |
+| 15 | Read interval in seconds |
+| 100 + slot | Temperature in hundredths of a °C, signed 16-bit (2150 = 21.50 °C, 0xFF38 = −2.00 °C). **0x8000 whenever the status isn't OK** |
+| 200 + slot | Status (see below) |
+| 300 + slot | Seconds since the last successful read (capped at 65534). 65535 if the sensor has never been read or isn't connected |
+| 1000 + 4 × slot | ROM ID, 4 registers per slot, two bytes per register in the same order as the address shown in the UI and API |
+
+Slot status, checked in this order:
+
+| Value | Meaning |
+|-------|---------|
+| 1 | Unassigned: no sensor in this slot |
+| 2 | Missing: the sensor wasn't found in the latest bus scan |
+| 3 | Read error: the sensor's latest read failed, or the whole read cycle failed |
+| 4 | Stale: never read successfully, or the last good reading is older than 3 × the read interval (at least 30 s) |
+| 0 | OK |
+
+Use the age registers if you need a stricter freshness limit than the stale rule.
+
+Each block (0–15, 100–199, 200–299, 300–399, 1000–1399) is separate. A read that covers an address outside those blocks, or runs from one block into the next, returns exception 0x02 (illegal data address). A single read can cover at most 125 registers, so the ROM block takes four reads.
+
+### Reading a consistent set
+
+A reading cycle can finish between two of your requests. To be sure the values you read all come from the same cycle, read register 5, read the blocks you need, then read register 5 again. If it changed, read again.
+
+### Unit ID and errors
+
+- Address requests to the configured unit ID (default 1). Unit ID 0 is also answered.
+- Requests for any other unit ID get exception 0x0B (gateway target device failed to respond).
+- Unit ID 255 isn't answered: the Modbus library Thermux uses (esp-modbus 2.1.3) drops it before it reaches the server. A fix has been submitted upstream ([espressif/esp-modbus#190](https://github.com/espressif/esp-modbus/pull/190)).
+- Every function code other than 04, including all writes, gets exception 0x01 (illegal function).
+- Up to 3 clients can be connected at once.
+
+### Discovery
+
+While the server is running, Thermux advertises it over mDNS as `_mbap._tcp`, with TXT records `unit` (unit ID), `id` (MAC address) and `map` (map version). Most PLCs don't use mDNS, so you'll usually enter the IP address and port by hand; give Thermux a DHCP reservation so the address doesn't change.
+
+### Examples
+
+[mbpoll](https://github.com/epsilonrt/mbpoll), temperatures of slots 0–5 (`-0` makes addresses zero-based):
+
+```bash
+mbpoll -m tcp -a 1 -0 -t 3 -r 100 -c 6 -1 thermux.local
+```
+
+Python with [pymodbus](https://github.com/pymodbus-dev/pymodbus) 3.9 or later (older versions use `slave=` instead of `device_id=`):
+
+```python
+from pymodbus.client import ModbusTcpClient
+
+client = ModbusTcpClient("thermux.local", port=502)
+client.connect()
+
+def read(address, count):
+    result = client.read_input_registers(address, count=count, device_id=1)
+    if result.isError():
+        raise RuntimeError(result)
+    return result.registers
+
+while True:
+    cycle = read(5, 1)[0]
+    temps = read(100, 10)
+    status = read(200, 10)
+    if read(5, 1)[0] == cycle:
+        break
+
+for slot, (raw, st) in enumerate(zip(temps, status)):
+    if st == 0:
+        celsius = (raw - 65536 if raw >= 32768 else raw) / 100
+        print(f"slot {slot}: {celsius:.2f} °C")
 ```
 
 ## OTA Updates

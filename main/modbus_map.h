@@ -9,7 +9,7 @@
  *   0..15       device info (see MB_INFO_*)
  *   100..199    temperature per slot, int16 in 0.01 degC, 0x8000 unless OK
  *   200..299    status per slot (modbus_slot_status_t)
- *   300..399    seconds since last successful read (65535 = never)
+ *   300..399    seconds since last successful read (65535 = never, or not connected)
  *   1000..1399  ROM ID, 4 registers per slot, big-endian byte pairs
  *
  * All MODBUS_SLOT_COUNT slots are always mapped, whatever CONFIG_MAX_SENSORS
@@ -179,6 +179,48 @@ bool modbus_slots_move(modbus_slot_table_t *table, int from, int to);
 
 /** Clear a slot. False on bad index. */
 bool modbus_slots_release(modbus_slot_table_t *table, int slot);
+
+/** Result of a checked slot operation (move, release, place) */
+typedef enum {
+    MB_SLOT_OP_OK = 0,
+    MB_SLOT_OP_BAD_INDEX,   /**< Slot number outside 0..MODBUS_SLOT_COUNT-1 */
+    MB_SLOT_OP_EMPTY,       /**< No sensor assigned to the source slot */
+    MB_SLOT_OP_PRESENT,     /**< Sensor is still on the bus, so it can't be released */
+    MB_SLOT_OP_OCCUPIED,    /**< Target slot already holds a sensor */
+    MB_SLOT_OP_DUPLICATE,   /**< ROM already assigned to another slot */
+} modbus_slot_op_t;
+
+/**
+ * @brief Move the sensor in @p from to @p to
+ *
+ * If @p to holds a sensor, the two swap places. Moving a slot onto itself is
+ * a no-op that succeeds.
+ */
+modbus_slot_op_t modbus_slots_move_sensor(modbus_slot_table_t *table, int from, int to);
+
+/**
+ * @brief Release a slot whose sensor is no longer on the bus
+ *
+ * A present sensor can't be released: the next read cycle would just give
+ * it a slot again.
+ *
+ * @param present_roms ROMs found in the latest scan
+ */
+modbus_slot_op_t modbus_slots_release_missing(modbus_slot_table_t *table, int slot,
+                                              const uint8_t (*present_roms)[MODBUS_ROM_LEN],
+                                              int present_count);
+
+/** Put @p rom into empty slot @p slot (used when restoring a backup) */
+modbus_slot_op_t modbus_slots_place(modbus_slot_table_t *table, int slot, const uint8_t *rom);
+
+/* ---- ROM ID text form ------------------------------------------------------ */
+
+/** 16 uppercase hex characters, the same form as sensor addresses in the API.
+ *  @p out must hold at least 17 bytes. */
+void modbus_rom_to_hex(const uint8_t *rom, char *out);
+
+/** Parse 16 hex characters (either case). False on wrong length or bad characters. */
+bool modbus_rom_from_hex(const char *str, uint8_t *rom);
 
 /* ---- Slot table persistence ---------------------------------------------- */
 
