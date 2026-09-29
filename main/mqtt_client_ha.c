@@ -657,13 +657,14 @@ esp_err_t mqtt_ha_publish_discovery_all(void)
 {
 #if CONFIG_HA_DISCOVERY_ENABLED
     int count;
-    const managed_sensor_t *sensors = sensor_manager_get_sensors(&count);
+    managed_sensor_t *sensors = sensor_manager_snapshot(&count);
     
     for (int i = 0; i < count; i++) {
         const char *name = sensors[i].has_friendly_name ? 
                            sensors[i].friendly_name : sensors[i].address_str;
         mqtt_ha_register_sensor(sensors[i].address_str, name);
     }
+    free(sensors);
     
     /* Register diagnostic entities */
     mqtt_ha_register_diagnostic_entities();

@@ -91,9 +91,11 @@ menu "Thermux Configuration"
         config MAX_SENSORS
             int "Maximum Number of Sensors"
             default 20
-            range 1 50
+            range 1 100
             help
-                Maximum number of temperature sensors to support
+                Maximum number of temperature sensors to support.
+                Scratch buffers are heap-allocated, so raising this mainly
+                costs about 110 bytes of static RAM per sensor.
 
         config SENSOR_READ_INTERVAL_MS
             int "Sensor Read Interval (ms)"

@@ -404,7 +404,7 @@ static esp_err_t api_sensors_get_handler(httpd_req_t *req)
 {
     CHECK_AUTH(req);
     int count;
-    const managed_sensor_t *sensors = sensor_manager_get_sensors(&count);
+    managed_sensor_t *sensors = sensor_manager_snapshot(&count);
 
     cJSON *root = cJSON_CreateArray();
     
@@ -430,6 +430,7 @@ static esp_err_t api_sensors_get_handler(httpd_req_t *req)
         
         cJSON_AddItemToArray(root, sensor);
     }
+    free(sensors);
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
