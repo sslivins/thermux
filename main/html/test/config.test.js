@@ -91,3 +91,28 @@ test('restoreFileLabelState: file selected', () => {
     assert.equal(state.hasFile, true);
     assert.equal(state.disabled, false);
 });
+
+test('planSlotMove: free target needs no swap', () => {
+    const { planSlotMove } = loadConfigHtmlExports();
+    const plan = planSlotMove([{ slot: 0 }], 0, 5, 100);
+    assert.equal(plan.ok, true);
+    assert.equal(plan.swapWith, null);
+});
+
+test('planSlotMove: used target reports the sensor it swaps with', () => {
+    const { planSlotMove } = loadConfigHtmlExports();
+    const other = { slot: 5, name: 'Return' };
+    const plan = planSlotMove([{ slot: 0 }, other], 0, 5, 100);
+    assert.equal(plan.ok, true);
+    assert.equal(plan.swapWith, other);
+});
+
+test('planSlotMove: rejects out-of-range, non-integer and same-slot targets', () => {
+    const { planSlotMove } = loadConfigHtmlExports();
+    for (const to of [-1, 100, 2.5, NaN]) {
+        const plan = planSlotMove([{ slot: 0 }], 0, to, 100);
+        assert.equal(plan.ok, false, `target ${to}`);
+        assert.match(plan.error, /between 0 and 99/);
+    }
+    assert.match(planSlotMove([{ slot: 3 }], 3, 3, 100).error, /already in slot 3/);
+});

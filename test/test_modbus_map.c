@@ -395,8 +395,104 @@ void test_modbus_unit_id_accepted(void)
     TEST_ASSERT_FALSE(modbus_unit_id_accepted(1, 247));
 }
 
+void test_modbus_move_sensor_checks(void)
+{
+    modbus_slot_table_t t;
+    memset(&t, 0, sizeof(t));
+    t.slots[2].assigned = true;
+    make_rom(t.slots[2].rom, 1);
+    t.slots[7].assigned = true;
+    make_rom(t.slots[7].rom, 2);
+
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_EMPTY, modbus_slots_move_sensor(&t, 3, 7));
+    TEST_ASSERT_EQUAL_UINT8(2, t.slots[7].rom[1]);
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_BAD_INDEX, modbus_slots_move_sensor(&t, 2, MODBUS_SLOT_COUNT));
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_BAD_INDEX, modbus_slots_move_sensor(&t, -1, 0));
+
+    /* Onto an occupied slot swaps */
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_OK, modbus_slots_move_sensor(&t, 2, 7));
+    TEST_ASSERT_EQUAL_UINT8(1, t.slots[7].rom[1]);
+    TEST_ASSERT_EQUAL_UINT8(2, t.slots[2].rom[1]);
+
+    /* Onto itself is a no-op */
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_OK, modbus_slots_move_sensor(&t, 7, 7));
+    TEST_ASSERT_EQUAL_UINT8(1, t.slots[7].rom[1]);
+    TEST_ASSERT_EQUAL_INT(2, modbus_slots_assigned_count(&t));
+}
+
+void test_modbus_release_only_missing(void)
+{
+    modbus_slot_table_t t;
+    memset(&t, 0, sizeof(t));
+    t.slots[0].assigned = true;
+    make_rom(t.slots[0].rom, 1);
+    t.slots[1].assigned = true;
+    make_rom(t.slots[1].rom, 2);
+    uint8_t present[1][MODBUS_ROM_LEN];
+    make_rom(present[0], 1);
+    const uint8_t (*p)[MODBUS_ROM_LEN] = (const uint8_t (*)[MODBUS_ROM_LEN])present;
+
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_PRESENT, modbus_slots_release_missing(&t, 0, p, 1));
+    TEST_ASSERT_TRUE(t.slots[0].assigned);
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_EMPTY, modbus_slots_release_missing(&t, 5, p, 1));
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_BAD_INDEX, modbus_slots_release_missing(&t, 100, p, 1));
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_OK, modbus_slots_release_missing(&t, 1, p, 1));
+    TEST_ASSERT_FALSE(t.slots[1].assigned);
+
+    /* A released slot is free for the next new sensor, and the released
+     * sensor doesn't come back while it's missing */
+    uint8_t roms[2][MODBUS_ROM_LEN];
+    make_rom(roms[0], 1);
+    make_rom(roms[1], 3);
+    int n = 0;
+    modbus_slots_auto_assign(&t, (const uint8_t (*)[MODBUS_ROM_LEN])roms, 2, &n);
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_EQUAL_UINT8(3, t.slots[1].rom[1]);
+}
+
+void test_modbus_place_for_restore(void)
+{
+    modbus_slot_table_t t;
+    memset(&t, 0, sizeof(t));
+    uint8_t a[MODBUS_ROM_LEN], b[MODBUS_ROM_LEN];
+    make_rom(a, 1);
+    make_rom(b, 2);
+
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_OK, modbus_slots_place(&t, 99, a));
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_OCCUPIED, modbus_slots_place(&t, 99, b));
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_DUPLICATE, modbus_slots_place(&t, 3, a));
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_BAD_INDEX, modbus_slots_place(&t, 100, b));
+    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_BAD_INDEX, modbus_slots_place(&t, -1, b));
+    TEST_ASSERT_EQUAL_INT(1, modbus_slots_assigned_count(&t));
+    TEST_ASSERT_EQUAL_INT(99, modbus_slots_find(&t, a));
+}
+
+void test_modbus_rom_hex_round_trip(void)
+{
+    const uint8_t rom[MODBUS_ROM_LEN] = {0x28, 0xFF, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC};
+    char hex[17];
+    modbus_rom_to_hex(rom, hex);
+    TEST_ASSERT_EQUAL_STRING("28FF123456789ABC", hex);
+
+    uint8_t back[MODBUS_ROM_LEN];
+    TEST_ASSERT_TRUE(modbus_rom_from_hex("28ff123456789abc", back));
+    TEST_ASSERT_EQUAL_MEMORY(rom, back, MODBUS_ROM_LEN);
+
+    memset(back, 0xEE, sizeof(back));
+    TEST_ASSERT_FALSE(modbus_rom_from_hex("28FF123456789AB", back));
+    TEST_ASSERT_FALSE(modbus_rom_from_hex("28FF123456789ABCD", back));
+    TEST_ASSERT_FALSE(modbus_rom_from_hex("28FF123456789ABG", back));
+    TEST_ASSERT_FALSE(modbus_rom_from_hex("", back));
+    TEST_ASSERT_FALSE(modbus_rom_from_hex(NULL, back));
+    TEST_ASSERT_EQUAL_UINT8(0xEE, back[0]); /* untouched on failure */
+}
+
 void run_modbus_map_tests(void)
 {
+    RUN_TEST(test_modbus_move_sensor_checks);
+    RUN_TEST(test_modbus_release_only_missing);
+    RUN_TEST(test_modbus_place_for_restore);
+    RUN_TEST(test_modbus_rom_hex_round_trip);
     RUN_TEST(test_modbus_unit_id_accepted);
     RUN_TEST(test_modbus_temp_rounding_and_sign);
     RUN_TEST(test_modbus_temp_clamps_and_never_returns_invalid_marker);

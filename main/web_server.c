@@ -1595,6 +1595,20 @@ static esp_err_t api_system_factory_reset_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* 2: adds the "modbus" section (settings and slot table) */
+#define BACKUP_SCHEMA_VERSION 2
+
+/** True if @p item is a whole number in [min, max] */
+static bool json_int_in_range(const cJSON *item, int min, int max, int *out)
+{
+    if (!cJSON_IsNumber(item) || item->valuedouble < min || item->valuedouble > max ||
+        item->valuedouble != (double)item->valueint) {
+        return false;
+    }
+    *out = item->valueint;
+    return true;
+}
+
 /**
  * @brief cJSON array callback for backup export - appends one sensor name entry
  */
@@ -1635,7 +1649,7 @@ static esp_err_t api_backup_get_handler(httpd_req_t *req)
     }
 
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "schema_version", 1);
+    cJSON_AddNumberToObject(root, "schema_version", BACKUP_SCHEMA_VERSION);
     cJSON_AddStringToObject(root, "device_version", APP_VERSION);
 
     cJSON *names = cJSON_CreateArray();
@@ -1654,6 +1668,33 @@ static esp_err_t api_backup_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(settings, "publish_interval_ms", publish_interval);
     cJSON_AddNumberToObject(settings, "resolution", resolution);
     cJSON_AddItemToObject(root, "sensor_settings", settings);
+
+    /* Modbus settings and slot table: no secrets, so always included */
+    modbus_status_t mb_status;
+    modbus_server_get_status(&mb_status);
+    cJSON *modbus = cJSON_CreateObject();
+    cJSON_AddBoolToObject(modbus, "enabled", mb_status.config.enabled);
+    cJSON_AddNumberToObject(modbus, "port", mb_status.config.port);
+    cJSON_AddNumberToObject(modbus, "unit_id", mb_status.config.unit_id);
+    cJSON *mb_slots = cJSON_CreateArray();
+    modbus_slot_table_t *table = malloc(sizeof(*table));
+    if (table != NULL) {
+        modbus_server_get_slots(table);
+        for (int s = 0; s < MODBUS_SLOT_COUNT; s++) {
+            if (!table->slots[s].assigned) {
+                continue;
+            }
+            char hex[MODBUS_ROM_LEN * 2 + 1];
+            modbus_rom_to_hex(table->slots[s].rom, hex);
+            cJSON *entry = cJSON_CreateObject();
+            cJSON_AddNumberToObject(entry, "slot", s);
+            cJSON_AddStringToObject(entry, "address", hex);
+            cJSON_AddItemToArray(mb_slots, entry);
+        }
+        free(table);
+    }
+    cJSON_AddItemToObject(modbus, "slots", mb_slots);
+    cJSON_AddItemToObject(root, "modbus", modbus);
 
     if (include_mqtt) {
         char uri[128] = "", user[64] = "", pass[64] = "";
@@ -1706,7 +1747,7 @@ static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
 {
     CHECK_AUTH(req);
 
-    if (req->content_len == 0 || req->content_len > 16384) {
+    if (req->content_len == 0 || req->content_len > 32768) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid backup size");
         return ESP_FAIL;
     }
@@ -1819,10 +1860,64 @@ static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
         auth_restored = true;
     }
 
+    /* Modbus: settings are all-or-nothing; each slot entry is checked on its
+     * own, and bad or conflicting entries are skipped */
+    bool modbus_restored = false;
+    int mb_slots_restored = 0, mb_slots_skipped = 0;
+    cJSON *modbus = cJSON_GetObjectItem(root, "modbus");
+    if (cJSON_IsObject(modbus)) {
+        modbus_config_t mb_cfg;
+        int port = 0, uid = 0;
+        cJSON *mb_enabled = cJSON_GetObjectItem(modbus, "enabled");
+        bool cfg_ok = cJSON_IsBool(mb_enabled) &&
+                      json_int_in_range(cJSON_GetObjectItem(modbus, "port"), 1, 65535, &port) &&
+                      json_int_in_range(cJSON_GetObjectItem(modbus, "unit_id"), 1, 247, &uid) &&
+                      modbus_config_valid((uint32_t)port, (uint32_t)uid, CONFIG_WEB_SERVER_PORT);
+        if (cfg_ok) {
+            mb_cfg.enabled = cJSON_IsTrue(mb_enabled);
+            mb_cfg.port = (uint16_t)port;
+            mb_cfg.unit_id = (uint8_t)uid;
+        } else {
+            ESP_LOGW(TAG, "Backup has invalid Modbus settings; keeping the current ones");
+        }
+
+        modbus_slot_table_t *table = NULL;
+        cJSON *slots = cJSON_GetObjectItem(modbus, "slots");
+        if (cJSON_IsArray(slots)) {
+            table = calloc(1, sizeof(*table));
+        }
+        if (table != NULL) {
+            cJSON *entry;
+            cJSON_ArrayForEach(entry, slots) {
+                int slot = -1;
+                uint8_t rom[MODBUS_ROM_LEN];
+                cJSON *addr = cJSON_GetObjectItem(entry, "address");
+                if (json_int_in_range(cJSON_GetObjectItem(entry, "slot"), 0, MODBUS_SLOT_COUNT - 1, &slot) &&
+                    cJSON_IsString(addr) && modbus_rom_from_hex(addr->valuestring, rom) &&
+                    modbus_slots_place(table, slot, rom) == MB_SLOT_OP_OK) {
+                    mb_slots_restored++;
+                } else {
+                    mb_slots_skipped++;
+                }
+            }
+        }
+
+        if (cfg_ok || table != NULL) {
+            esp_err_t mb_err = modbus_server_restore(cfg_ok ? &mb_cfg : NULL, table);
+            if (mb_err == ESP_OK) {
+                modbus_restored = true;
+            } else {
+                ESP_LOGE(TAG, "Failed to restore Modbus settings: %s", esp_err_to_name(mb_err));
+            }
+        }
+        free(table);
+    }
+
     cJSON_Delete(root);
 
-    ESP_LOGW(TAG, "Backup restored: %d sensor name(s), mqtt=%d wifi=%d auth=%d",
-             names_restored, mqtt_restored, wifi_restored, auth_restored);
+    ESP_LOGW(TAG, "Backup restored: %d sensor name(s), mqtt=%d wifi=%d auth=%d modbus=%d (%d slot(s), %d skipped)",
+             names_restored, mqtt_restored, wifi_restored, auth_restored,
+             modbus_restored, mb_slots_restored, mb_slots_skipped);
 
     cJSON *response = cJSON_CreateObject();
     cJSON_AddBoolToObject(response, "success", true);
@@ -1830,6 +1925,9 @@ static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(response, "mqtt_restored", mqtt_restored);
     cJSON_AddBoolToObject(response, "wifi_restored", wifi_restored);
     cJSON_AddBoolToObject(response, "auth_restored", auth_restored);
+    cJSON_AddBoolToObject(response, "modbus_restored", modbus_restored);
+    cJSON_AddNumberToObject(response, "modbus_slots_restored", mb_slots_restored);
+    cJSON_AddNumberToObject(response, "modbus_slots_skipped", mb_slots_skipped);
     cJSON_AddStringToObject(response, "message", "Restore complete. Restarting...");
 
     char *json = cJSON_PrintUnformatted(response);
@@ -2295,6 +2393,198 @@ static esp_err_t api_modbus_post_handler(httpd_req_t *req)
     return send_json(req, resp);
 }
 
+static const char *modbus_status_name(uint16_t status)
+{
+    switch (status) {
+    case MB_STATUS_OK:         return "ok";
+    case MB_STATUS_UNASSIGNED: return "unassigned";
+    case MB_STATUS_MISSING:    return "missing";
+    case MB_STATUS_READ_ERROR: return "read_error";
+    case MB_STATUS_STALE:      return "stale";
+    default:                   return "unknown";
+    }
+}
+
+/**
+ * @brief Build the list of assigned slots, as seen by Modbus clients
+ *
+ * Slot, status, temperature and ROM all come from one copy of the served
+ * register image, so the list always matches what clients read.
+ */
+static cJSON *build_modbus_slot_list(void)
+{
+    cJSON *arr = cJSON_CreateArray();
+    uint16_t *status = malloc(MODBUS_SLOT_COUNT * sizeof(uint16_t));
+    uint16_t *temp = malloc(MODBUS_SLOT_COUNT * sizeof(uint16_t));
+    uint16_t *rom_regs = malloc(MB_REG_ROM_COUNT * sizeof(uint16_t));
+    if (arr == NULL || status == NULL || temp == NULL || rom_regs == NULL) {
+        free(status);
+        free(temp);
+        free(rom_regs);
+        cJSON_Delete(arr);
+        return NULL;
+    }
+    modbus_server_get_slot_regs(status, temp, rom_regs);
+
+    int count = 0;
+    managed_sensor_t *sensors = sensor_manager_snapshot(&count);
+
+    for (int s = 0; s < MODBUS_SLOT_COUNT; s++) {
+        if (status[s] == MB_STATUS_UNASSIGNED) {
+            continue;
+        }
+        uint8_t rom[MODBUS_ROM_LEN];
+        for (int w = 0; w < MB_REGS_PER_ROM; w++) {
+            uint16_t v = rom_regs[s * MB_REGS_PER_ROM + w];
+            rom[w * 2] = (uint8_t)(v >> 8);
+            rom[w * 2 + 1] = (uint8_t)(v & 0xFF);
+        }
+        const managed_sensor_t *present = NULL;
+        for (int i = 0; i < count && sensors != NULL; i++) {
+            if (memcmp(sensors[i].hw_sensor.address, rom, MODBUS_ROM_LEN) == 0) {
+                present = &sensors[i];
+                break;
+            }
+        }
+
+        char hex[MODBUS_ROM_LEN * 2 + 1];
+        modbus_rom_to_hex(rom, hex);
+        cJSON *entry = cJSON_CreateObject();
+        cJSON_AddNumberToObject(entry, "slot", s);
+        cJSON_AddNumberToObject(entry, "temp_register", MB_REG_TEMP_START + s);
+        cJSON_AddStringToObject(entry, "address", hex);
+
+        char name[MAX_FRIENDLY_NAME_LEN] = "";
+        if (present != NULL && present->has_friendly_name) {
+            strlcpy(name, present->friendly_name, sizeof(name));
+        } else if (present == NULL) {
+            /* Names are kept in NVS even after a sensor is unplugged */
+            if (nvs_storage_load_sensor_name(rom, name, sizeof(name)) != ESP_OK) {
+                name[0] = '\0';
+            }
+        }
+        if (name[0]) {
+            cJSON_AddStringToObject(entry, "name", name);
+        } else {
+            cJSON_AddNullToObject(entry, "name");
+        }
+
+        cJSON_AddBoolToObject(entry, "present", present != NULL);
+        cJSON_AddStringToObject(entry, "status", modbus_status_name(status[s]));
+        if (temp[s] != MB_TEMP_INVALID) {
+            cJSON_AddNumberToObject(entry, "temperature", (int16_t)temp[s] / 100.0);
+        } else {
+            cJSON_AddNullToObject(entry, "temperature");
+        }
+        cJSON_AddItemToArray(arr, entry);
+    }
+
+    free(sensors);
+    free(status);
+    free(temp);
+    free(rom_regs);
+    return arr;
+}
+
+static esp_err_t send_modbus_slots(httpd_req_t *req, cJSON *root)
+{
+    cJSON *slots = build_modbus_slot_list();
+    if (slots == NULL) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+    cJSON_AddNumberToObject(root, "slot_capacity", MODBUS_SLOT_COUNT);
+    cJSON_AddItemToObject(root, "slots", slots);
+    return send_json(req, root);
+}
+
+/**
+ * @brief Handler for GET /api/modbus/slots
+ *
+ * Lists assigned slots with the sensor's address, name, and the status and
+ * temperature Modbus clients currently see.
+ */
+static esp_err_t api_modbus_slots_get_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    return send_modbus_slots(req, cJSON_CreateObject());
+}
+
+/**
+ * @brief Handler for POST /api/modbus/slots
+ *
+ * Body: {"action": "move", "from": 0-99, "to": 0-99} swaps the two slots, or
+ * {"action": "release", "slot": 0-99} frees a slot whose sensor is missing.
+ */
+static esp_err_t api_modbus_slots_post_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    char content[128];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_FAIL;
+    }
+    content[ret] = '\0';
+
+    cJSON *body = cJSON_Parse(content);
+    if (body == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    const int max_slot = MODBUS_SLOT_COUNT - 1;
+    cJSON *action = cJSON_GetObjectItem(body, "action");
+    int from = -1, to = -1, slot = -1;
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    modbus_slot_op_t op = MB_SLOT_OP_BAD_INDEX;
+    char msg[96] = "";
+    bool known = false;
+
+    if (cJSON_IsString(action) && strcmp(action->valuestring, "move") == 0) {
+        known = true;
+        if (json_int_in_range(cJSON_GetObjectItem(body, "from"), 0, max_slot, &from) &&
+            json_int_in_range(cJSON_GetObjectItem(body, "to"), 0, max_slot, &to)) {
+            err = modbus_server_move_slot(from, to, &op);
+        }
+        if (err == ESP_OK) {
+            snprintf(msg, sizeof(msg), "Moved slot %d to slot %d", from, to);
+        }
+    } else if (cJSON_IsString(action) && strcmp(action->valuestring, "release") == 0) {
+        known = true;
+        if (json_int_in_range(cJSON_GetObjectItem(body, "slot"), 0, max_slot, &slot)) {
+            err = modbus_server_release_slot(slot, &op);
+        }
+        if (err == ESP_OK) {
+            snprintf(msg, sizeof(msg), "Released slot %d", slot);
+        }
+    }
+    cJSON_Delete(body);
+
+    if (err != ESP_OK) {
+        if (!known) {
+            snprintf(msg, sizeof(msg), "Action must be \"move\" or \"release\"");
+        } else if (err != ESP_ERR_INVALID_ARG) {
+            snprintf(msg, sizeof(msg), "Could not save the slot table (%s)", esp_err_to_name(err));
+        } else if (op == MB_SLOT_OP_EMPTY) {
+            snprintf(msg, sizeof(msg), "Slot %d has no sensor", from >= 0 ? from : slot);
+        } else if (op == MB_SLOT_OP_PRESENT) {
+            snprintf(msg, sizeof(msg),
+                     "That sensor is still connected; only missing sensors can be released");
+        } else {
+            snprintf(msg, sizeof(msg), "Slot numbers must be 0-%d", max_slot);
+        }
+        httpd_resp_set_status(req, err == ESP_ERR_INVALID_ARG || !known
+                                   ? "400 Bad Request" : "500 Internal Server Error");
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "success", err == ESP_OK);
+    cJSON_AddStringToObject(resp, "message", msg);
+    return send_modbus_slots(req, resp);
+}
+
 esp_err_t web_server_start(void)
 {
     /* Load auth config from NVS */
@@ -2308,7 +2598,7 @@ esp_err_t web_server_start(void)
     /* Reuse the oldest connection instead of refusing new ones when all
      * sockets are busy (the socket budget is shared with Modbus TCP) */
     config.lru_purge_enable = true;
-    config.max_uri_handlers = 44;  /* 38 endpoints + room for future */
+    config.max_uri_handlers = 46;  /* 41 endpoints + room for future */
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
@@ -2549,6 +2839,20 @@ esp_err_t web_server_start(void)
         .handler = api_modbus_post_handler,
     };
     REGISTER_URI(modbus_post_uri);
+
+    httpd_uri_t modbus_slots_get_uri = {
+        .uri = "/api/modbus/slots",
+        .method = HTTP_GET,
+        .handler = api_modbus_slots_get_handler,
+    };
+    REGISTER_URI(modbus_slots_get_uri);
+
+    httpd_uri_t modbus_slots_post_uri = {
+        .uri = "/api/modbus/slots",
+        .method = HTTP_POST,
+        .handler = api_modbus_slots_post_handler,
+    };
+    REGISTER_URI(modbus_slots_post_uri);
 
     /* System endpoints */
     httpd_uri_t system_restart_uri = {

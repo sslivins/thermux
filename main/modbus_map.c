@@ -259,6 +259,94 @@ bool modbus_slots_release(modbus_slot_table_t *table, int slot)
     return true;
 }
 
+static bool slot_index_ok(int slot)
+{
+    return slot >= 0 && slot < MODBUS_SLOT_COUNT;
+}
+
+modbus_slot_op_t modbus_slots_move_sensor(modbus_slot_table_t *table, int from, int to)
+{
+    if (!slot_index_ok(from) || !slot_index_ok(to)) {
+        return MB_SLOT_OP_BAD_INDEX;
+    }
+    if (!table->slots[from].assigned) {
+        return MB_SLOT_OP_EMPTY;
+    }
+    modbus_slots_move(table, from, to);
+    return MB_SLOT_OP_OK;
+}
+
+modbus_slot_op_t modbus_slots_release_missing(modbus_slot_table_t *table, int slot,
+                                              const uint8_t (*present_roms)[MODBUS_ROM_LEN],
+                                              int present_count)
+{
+    if (!slot_index_ok(slot)) {
+        return MB_SLOT_OP_BAD_INDEX;
+    }
+    if (!table->slots[slot].assigned) {
+        return MB_SLOT_OP_EMPTY;
+    }
+    for (int i = 0; i < present_count && present_roms != NULL; i++) {
+        if (memcmp(present_roms[i], table->slots[slot].rom, MODBUS_ROM_LEN) == 0) {
+            return MB_SLOT_OP_PRESENT;
+        }
+    }
+    modbus_slots_release(table, slot);
+    return MB_SLOT_OP_OK;
+}
+
+modbus_slot_op_t modbus_slots_place(modbus_slot_table_t *table, int slot, const uint8_t *rom)
+{
+    if (!slot_index_ok(slot)) {
+        return MB_SLOT_OP_BAD_INDEX;
+    }
+    if (table->slots[slot].assigned) {
+        return MB_SLOT_OP_OCCUPIED;
+    }
+    if (modbus_slots_find(table, rom) >= 0) {
+        return MB_SLOT_OP_DUPLICATE;
+    }
+    table->slots[slot].assigned = true;
+    memcpy(table->slots[slot].rom, rom, MODBUS_ROM_LEN);
+    return MB_SLOT_OP_OK;
+}
+
+void modbus_rom_to_hex(const uint8_t *rom, char *out)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    for (int i = 0; i < MODBUS_ROM_LEN; i++) {
+        out[i * 2] = hex[rom[i] >> 4];
+        out[i * 2 + 1] = hex[rom[i] & 0x0F];
+    }
+    out[MODBUS_ROM_LEN * 2] = '\0';
+}
+
+static int hex_nibble(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+bool modbus_rom_from_hex(const char *str, uint8_t *rom)
+{
+    if (str == NULL || strlen(str) != MODBUS_ROM_LEN * 2) {
+        return false;
+    }
+    uint8_t tmp[MODBUS_ROM_LEN];
+    for (int i = 0; i < MODBUS_ROM_LEN; i++) {
+        int hi = hex_nibble(str[i * 2]);
+        int lo = hex_nibble(str[i * 2 + 1]);
+        if (hi < 0 || lo < 0) {
+            return false;
+        }
+        tmp[i] = (uint8_t)((hi << 4) | lo);
+    }
+    memcpy(rom, tmp, sizeof(tmp));
+    return true;
+}
+
 uint32_t modbus_crc32(const uint8_t *data, size_t len)
 {
     uint32_t crc = 0xFFFFFFFFu;

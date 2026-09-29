@@ -47,6 +47,45 @@ esp_err_t modbus_server_init(void);
  */
 void modbus_server_update(void);
 
+/** Copy of the slot table */
+void modbus_server_get_slots(modbus_slot_table_t *out);
+
+/** Registers for every slot exactly as currently served (one consistent image).
+ *  Slots whose status is MB_STATUS_UNASSIGNED have no sensor. */
+void modbus_server_get_slot_regs(uint16_t status[MODBUS_SLOT_COUNT],
+                                 uint16_t temp[MODBUS_SLOT_COUNT],
+                                 uint16_t rom[MB_REG_ROM_COUNT]);
+
+/**
+ * @brief Move the sensor in slot @p from to slot @p to (swapping if occupied)
+ *
+ * Saved to NVS and applied to the registers before returning.
+ *
+ * @param[out] op Why the move was refused (may be NULL)
+ * @return ESP_OK, ESP_ERR_INVALID_ARG if refused (see @p op), or an NVS error
+ */
+esp_err_t modbus_server_move_slot(int from, int to, modbus_slot_op_t *op);
+
+/**
+ * @brief Release a slot whose sensor is no longer on the bus
+ *
+ * @param[out] op Why the release was refused (may be NULL)
+ * @return ESP_OK, ESP_ERR_INVALID_ARG if refused (see @p op), or an NVS error
+ */
+esp_err_t modbus_server_release_slot(int slot, modbus_slot_op_t *op);
+
+/**
+ * @brief Save settings and/or a slot table from a backup
+ *
+ * Settings are only written to NVS and take effect after the restart that
+ * follows a restore. The slot table replaces the current one immediately so
+ * a read cycle can't write the old table back before the restart.
+ *
+ * @param cfg   Settings to save, or NULL to leave them alone
+ * @param slots Slot table to use, or NULL to leave it alone
+ */
+esp_err_t modbus_server_restore(const modbus_config_t *cfg, const modbus_slot_table_t *slots);
+
 /**
  * @brief Validate, apply and persist new settings
  *
