@@ -250,6 +250,71 @@ static bool ds18b20_check_genuine(const uint8_t *address, bool *check_ok,
     return true;
 }
 
+/*
+ * Genuineness results cached by ROM ID. The check forces a ~600 ms 12-bit
+ * conversion per genuine sensor, so re-running it on every rescan would make
+ * a 100-sensor rescan hold the bus for about a minute. Only completed checks
+ * are cached; inconclusive ones (bus/CRC error) are retried on the next scan.
+ */
+typedef struct {
+    uint8_t address[ONEWIRE_ROM_SIZE];
+    bool genuine;
+    uint8_t count_remain;
+    uint8_t count_per_c;
+    int conversion_time_ms;
+} genuine_cache_entry_t;
+
+static genuine_cache_entry_t s_genuine_cache[CONFIG_MAX_SENSORS];
+static int s_genuine_cache_count = 0;
+static int s_genuine_cache_next = 0;
+
+static const genuine_cache_entry_t *genuine_cache_find(const uint8_t *address)
+{
+    for (int i = 0; i < s_genuine_cache_count; i++) {
+        if (memcmp(s_genuine_cache[i].address, address, ONEWIRE_ROM_SIZE) == 0) {
+            return &s_genuine_cache[i];
+        }
+    }
+    return NULL;
+}
+
+static void genuine_cache_store(const onewire_sensor_t *sensor)
+{
+    genuine_cache_entry_t *entry;
+    if (s_genuine_cache_count < CONFIG_MAX_SENSORS) {
+        entry = &s_genuine_cache[s_genuine_cache_count++];
+    } else {
+        entry = &s_genuine_cache[s_genuine_cache_next];
+        s_genuine_cache_next = (s_genuine_cache_next + 1) % CONFIG_MAX_SENSORS;
+    }
+    memcpy(entry->address, sensor->address, ONEWIRE_ROM_SIZE);
+    entry->genuine = sensor->genuine;
+    entry->count_remain = sensor->count_remain;
+    entry->count_per_c = sensor->count_per_c;
+    entry->conversion_time_ms = sensor->conversion_time_ms;
+}
+
+static void check_genuine_cached(onewire_sensor_t *sensor)
+{
+    const genuine_cache_entry_t *cached = genuine_cache_find(sensor->address);
+    if (cached) {
+        sensor->genuine = cached->genuine;
+        sensor->genuine_check_ok = true;
+        sensor->count_remain = cached->count_remain;
+        sensor->count_per_c = cached->count_per_c;
+        sensor->conversion_time_ms = cached->conversion_time_ms;
+        return;
+    }
+    sensor->genuine = ds18b20_check_genuine(sensor->address,
+                                            &sensor->genuine_check_ok,
+                                            &sensor->count_remain,
+                                            &sensor->count_per_c,
+                                            &sensor->conversion_time_ms);
+    if (sensor->genuine_check_ok) {
+        genuine_cache_store(sensor);
+    }
+}
+
 static void record_read_attempt(bool failed)
 {
     portENTER_CRITICAL(&s_stats_lock);
@@ -336,11 +401,23 @@ static esp_err_t onewire_temp_scan_locked(onewire_sensor_t *sensors, int max_sen
         return err;
     }
 
-    /* Allocate handles array if needed */
+    /* Release the previous scan's device handles before allocating new ones */
     if (s_ds18b20_handles) {
+        for (int i = 0; i < s_device_count; i++) {
+            if (s_ds18b20_handles[i]) {
+                ds18b20_del_device(s_ds18b20_handles[i]);
+            }
+        }
         free(s_ds18b20_handles);
+        s_ds18b20_handles = NULL;
     }
+    s_device_count = 0;
     s_ds18b20_handles = calloc(max_sensors, sizeof(ds18b20_device_handle_t));
+    if (s_ds18b20_handles == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate device handle array");
+        onewire_del_device_iter(iter);
+        return ESP_ERR_NO_MEM;
+    }
     
     /* Iterate through all devices. Cap consecutive bus errors so a missing/
        failing bus (e.g. no sensor wired, noisy line) can't spin this loop
@@ -378,11 +455,7 @@ static esp_err_t onewire_temp_scan_locked(onewire_sensor_t *sensors, int max_sen
         sensors[count].last_read_time = 0;
         sensors[count].total_reads = 0;
         sensors[count].failed_reads = 0;
-        sensors[count].genuine = ds18b20_check_genuine(sensors[count].address,
-                                                         &sensors[count].genuine_check_ok,
-                                                         &sensors[count].count_remain,
-                                                         &sensors[count].count_per_c,
-                                                         &sensors[count].conversion_time_ms);
+        check_genuine_cached(&sensors[count]);
 
         /* Create DS18B20 device handle */
         ds18b20_config_t ds18b20_config = {};

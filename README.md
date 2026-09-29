@@ -1,10 +1,10 @@
 # Thermux
 
-A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assistant integration via MQTT auto-discovery. **Supports up to 20 DS18B20 sensors on a single 1-Wire bus** - perfect for monitoring multiple zones, equipment, or environments from one device.
+A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assistant integration via MQTT auto-discovery. **Supports 20 DS18B20 sensors on a single 1-Wire bus by default, configurable up to 100** (`CONFIG_MAX_SENSORS`) - perfect for monitoring multiple zones, equipment, or environments from one device.
 
 ## Features
 
-- **Up to 20 DS18B20 Sensors** - Monitor multiple temperature points from a single device on one 1-Wire bus
+- **Up to 100 DS18B20 Sensors** - Monitor multiple temperature points from a single device on one 1-Wire bus (20 by default; raise `CONFIG_MAX_SENSORS` in menuconfig, max 100)
 - **Optimized Parallel Reads** - Uses 1-Wire skip ROM command to read all sensors simultaneously (~1050ms for 20 sensors in 12-bit mode, ~450ms in 9-bit)
 - **Home Assistant Integration** - MQTT auto-discovery for seamless integration
 - **Web Interface** - Configuration and monitoring via built-in web server

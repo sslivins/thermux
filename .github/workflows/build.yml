@@ -27,12 +27,25 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # "default" builds the checked-in sdkconfig; "100" guards the maximum
+        # supported sensor count against stack/RAM regressions.
+        max_sensors: [default, 100]
+    name: build (max_sensors=${{ matrix.max_sensors }})
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
+
+      - name: Set CONFIG_MAX_SENSORS
+        if: matrix.max_sensors != 'default'
+        run: |
+          sed -i 's/^CONFIG_MAX_SENSORS=.*/CONFIG_MAX_SENSORS=${{ matrix.max_sensors }}/' sdkconfig
+          grep '^CONFIG_MAX_SENSORS=' sdkconfig
 
       - name: ESP-IDF Build
         uses: espressif/esp-idf-ci-action@v1

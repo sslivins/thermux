@@ -20,7 +20,27 @@ typedef struct {
     char friendly_name[MAX_FRIENDLY_NAME_LEN]; /**< User-assigned friendly name */
     bool has_friendly_name;                    /**< True if friendly name is set */
     char address_str[17];                      /**< Address as hex string */
+    int64_t last_attempt_time;                 /**< Uptime (ms) of the last read attempt, 0 if never */
 } managed_sensor_t;
+
+/**
+ * @brief Outcome of the most recent read cycle
+ */
+typedef enum {
+    SENSOR_CYCLE_OK = 0,          /**< Every sensor read successfully */
+    SENSOR_CYCLE_PARTIAL = 1,     /**< Some sensors failed */
+    SENSOR_CYCLE_FAILED = 2,      /**< No sensor read successfully (bus failure, lock timeout, ...) */
+    SENSOR_CYCLE_NO_SENSORS = 3,  /**< No sensors discovered */
+} sensor_cycle_result_t;
+
+/**
+ * @brief Read-cycle bookkeeping, updated after every scheduled read attempt
+ */
+typedef struct {
+    uint32_t cycle_count;              /**< Increments after every attempted cycle (wraps) */
+    sensor_cycle_result_t last_result; /**< Result of the most recent cycle */
+    int64_t last_cycle_time;           /**< Uptime (ms) when the last cycle finished, 0 if none */
+} sensor_cycle_info_t;
 
 /**
  * @brief Initialize sensor manager and discover sensors
@@ -29,6 +49,9 @@ esp_err_t sensor_manager_init(void);
 
 /**
  * @brief Re-scan for sensors (hot-plug support)
+ *
+ * Serialized with read cycles, so a read never pairs the old registry with
+ * the newly scanned device order.
  */
 esp_err_t sensor_manager_rescan(void);
 
@@ -43,11 +66,21 @@ esp_err_t sensor_manager_read_all(void);
 esp_err_t sensor_manager_publish_all(void);
 
 /**
- * @brief Get all managed sensors
- * @param count Output: number of sensors
- * @return Array of managed sensors (do not free)
+ * @brief Copy the current sensor registry
+ *
+ * Returns a heap-allocated copy that the caller owns and must free(). The
+ * copy is consistent (taken under the registry lock) and stays valid across
+ * rescans.
+ *
+ * @param count Output: number of sensors in the copy
+ * @return Array of @p count sensors, or NULL if there are none or allocation failed
  */
-const managed_sensor_t* sensor_manager_get_sensors(int *count);
+managed_sensor_t *sensor_manager_snapshot(int *count);
+
+/**
+ * @brief Get read-cycle bookkeeping
+ */
+void sensor_manager_get_cycle_info(sensor_cycle_info_t *out);
 
 /**
  * @brief Set friendly name for a sensor
@@ -57,16 +90,12 @@ const managed_sensor_t* sensor_manager_get_sensors(int *count);
 esp_err_t sensor_manager_set_friendly_name(const char *address_str, const char *friendly_name);
 
 /**
- * @brief Get friendly name for a sensor
+ * @brief Copy a single sensor by address string
  * @param address_str Sensor address as hex string
- * @return Friendly name or address string if no name set
+ * @param out Output copy of the sensor
+ * @return ESP_OK, or ESP_ERR_NOT_FOUND if no sensor has that address
  */
-const char* sensor_manager_get_display_name(const char *address_str);
-
-/**
- * @brief Get sensor by address string
- */
-const managed_sensor_t* sensor_manager_get_sensor(const char *address_str);
+esp_err_t sensor_manager_get_sensor(const char *address_str, managed_sensor_t *out);
 
 /**
  * @brief Get number of sensors
