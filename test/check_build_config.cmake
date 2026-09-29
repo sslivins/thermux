@@ -118,6 +118,21 @@ else()
     endif()
 endif()
 
+# ---- 5. Modbus TCP server (#108) ---------------------------------------------
+# esp-modbus's own mDNS integration calls mdns_free() on shutdown, which would
+# remove Thermux's _http/_thermux records; Thermux advertises _mbap itself.
+assert_contains("${SDK}" "# CONFIG_FMB_MDNS_INTEGRATION_ENABLE is not set"
+    "esp-modbus mDNS integration must stay off; its shutdown calls mdns_free() and drops Thermux's own mDNS services")
+# Without UID support esp-modbus ignores the MBAP unit ID, so the configurable
+# unit ID would silently have no effect.
+assert_contains("${SDK}" "CONFIG_FMB_TCP_UID_ENABLED=y"
+    "the Modbus unit ID setting only works with FMB_TCP_UID_ENABLED")
+# Socket budget: HTTP (7 + 3 internal) + Modbus (1 listener + 3 clients) + MQTT + OTA.
+assert_contains("${SDK}" "CONFIG_FMB_TCP_PORT_MAX_CONN=3"
+    "Modbus client limit is part of the socket budget; raising it needs CONFIG_LWIP_MAX_SOCKETS raised too")
+assert_contains("${SDK}" "CONFIG_LWIP_MAX_SOCKETS=20"
+    "the socket budget for HTTP + Modbus + MQTT + OTA needs 20 sockets")
+
 # ---- Result -----------------------------------------------------------------
 if(_failures GREATER 0)
     message(FATAL_ERROR "check_build_config: ${_failures} invariant(s) failed (see FAIL lines above)")

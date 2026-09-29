@@ -47,6 +47,8 @@ idf_component_register(
         "log_persist.c"
         "version_utils.c"
         "time_sync.c"
+        "modbus_map.c"
+        "modbus_server.c"
     INCLUDE_DIRS "."
     REQUIRES 
         nvs_flash
@@ -64,6 +66,8 @@ idf_component_register(
         esp_partition
         esp_timer
         esp-tls
+        esp_app_format
+        espressif__esp-modbus
     EMBED_FILES
         "${HTML_BUILD_DIR}/index.html.gz"
         "${HTML_BUILD_DIR}/config.html.gz"

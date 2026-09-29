@@ -21,6 +21,21 @@ test.describe('OTA pre-release channel checkbox', () => {
         await mock.close();
     });
 
+    /* loadConfig() applies the device's channel setting asynchronously; toggling
+     * the box before that lands races with it (the toggle can be a no-op, or
+     * be overwritten afterwards). The sensor card is filled in after the
+     * channel setting, so it marks the point where the checkbox is settled. */
+    async function waitForConfigLoaded(page) {
+        await expect(page.locator('#read-interval-current')).not.toContainText('Loading');
+    }
+
+    /* The POST reaches the mock asynchronously after the click */
+    async function waitForChannelPost() {
+        const find = () => mock.requests.find((r) => r.method === 'POST' && r.path === '/api/ota/channel');
+        await expect.poll(() => Boolean(find())).toBe(true);
+        return find();
+    }
+
     test('defaults to unchecked when the device reports the channel disabled', async ({ page }) => {
         mock = await startMockServer();
         await page.goto(`${mock.baseURL}/config`);
@@ -39,10 +54,11 @@ test.describe('OTA pre-release channel checkbox', () => {
     test('checking the box POSTs include_prerelease=true and shows a confirmation toast', async ({ page }) => {
         mock = await startMockServer();
         await page.goto(`${mock.baseURL}/config`);
+        await waitForConfigLoaded(page);
 
         await page.locator('#ota-include-prerelease').check();
 
-        const channelRequest = mock.requests.find((r) => r.method === 'POST' && r.path === '/api/ota/channel');
+        const channelRequest = await waitForChannelPost();
         expect(channelRequest, 'expected a POST /api/ota/channel request').toBeTruthy();
         expect(JSON.parse(channelRequest.body)).toEqual({ include_prerelease: true });
         await expect(page.locator('#toast')).toContainText('Beta channel enabled');
@@ -52,10 +68,13 @@ test.describe('OTA pre-release channel checkbox', () => {
         mock = await startMockServer();
         mock.state.otaChannel.include_prerelease = true;
         await page.goto(`${mock.baseURL}/config`);
+        await waitForConfigLoaded(page);
+        await expect(page.locator('#ota-include-prerelease')).toBeChecked();
 
         await page.locator('#ota-include-prerelease').uncheck();
 
-        const channelRequest = mock.requests.find((r) => r.method === 'POST' && r.path === '/api/ota/channel');
+        const channelRequest = await waitForChannelPost();
+        expect(channelRequest, 'expected a POST /api/ota/channel request').toBeTruthy();
         expect(JSON.parse(channelRequest.body)).toEqual({ include_prerelease: false });
         await expect(page.locator('#toast')).toContainText('Beta channel disabled');
     });

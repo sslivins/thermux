@@ -19,9 +19,11 @@ add_executable(test_runner
     test_config_utils.c
     test_nvs_utils.c
     test_bus_stats.c
+    test_modbus_map.c
     # Modules under test (test-only utilities are local, version_utils is shared)
     ../main/version_utils.c
     ../main/bus_stats.c
+    ../main/modbus_map.c
     mqtt_utils.c
     config_utils.c
     nvs_utils.c
@@ -33,7 +35,7 @@ target_include_directories(test_runner PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/unity/src
 )
 
-target_link_libraries(test_runner unity)
+target_link_libraries(test_runner unity m)
 
 # Register test with CTest
 add_test(NAME unit_tests COMMAND test_runner)

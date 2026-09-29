@@ -60,6 +60,21 @@ function defaultState() {
         authStatus: { auth_enabled: false, logged_in: true },
         logLevel: { level: 3, level_name: 'info' },
         otaChannel: { include_prerelease: false },
+        modbus: {
+            enabled: false,
+            port: 502,
+            unit_id: 1,
+            running: false,
+            error: null,
+            requests: 0,
+            last_request_age_s: null,
+            map_version: 1,
+            slot_capacity: 100,
+            slots_assigned: 0,
+            sensors_without_slot: 0,
+        },
+        /** When set, POST /api/modbus fails with this message (simulates a port that won't bind) */
+        modbusFailMessage: null,
         otaStatus: {
             checking: false,
             result: 1,
@@ -163,6 +178,25 @@ function createMockServer() {
                 read_interval_clamped: clamped,
                 min_safe_read_interval_ms: minSafe,
             });
+        }
+        if (req.method === 'GET' && url.pathname === '/api/modbus') {
+            return sendJson(res, 200, state.modbus);
+        }
+        if (req.method === 'POST' && url.pathname === '/api/modbus') {
+            let parsed;
+            try {
+                parsed = JSON.parse(body);
+            } catch {
+                return sendJson(res, 400, { error: 'Invalid JSON' });
+            }
+            if (state.modbusFailMessage) {
+                return sendJson(res, 500, { success: false, message: state.modbusFailMessage, ...state.modbus });
+            }
+            if (typeof parsed.enabled === 'boolean') state.modbus.enabled = parsed.enabled;
+            if (typeof parsed.port === 'number') state.modbus.port = parsed.port;
+            if (typeof parsed.unit_id === 'number') state.modbus.unit_id = parsed.unit_id;
+            state.modbus.running = state.modbus.enabled;
+            return sendJson(res, 200, { success: true, message: 'Modbus settings saved', ...state.modbus });
         }
         if (req.method === 'GET' && url.pathname === '/api/config/auth') {
             return sendJson(res, 200, state.auth);

@@ -113,6 +113,20 @@ static esp_err_t scan_and_rebuild_locked(void)
     free(hw);
 
     data_lock();
+    /* Keep the latest reading of sensors that are still present, so a rescan
+       doesn't blank values (and Modbus ages) until the next read cycle */
+    for (int i = 0; i < found; i++) {
+        for (int j = 0; j < s_sensor_count; j++) {
+            const managed_sensor_t *old = &s_sensors[j];
+            if (memcmp(old->hw_sensor.address, fresh[i].hw_sensor.address, ONEWIRE_ROM_SIZE) == 0) {
+                fresh[i].hw_sensor.temperature = old->hw_sensor.temperature;
+                fresh[i].hw_sensor.valid = old->hw_sensor.valid;
+                fresh[i].hw_sensor.last_read_time = old->hw_sensor.last_read_time;
+                fresh[i].last_attempt_time = old->last_attempt_time;
+                break;
+            }
+        }
+    }
     memset(s_sensors, 0, sizeof(s_sensors));
     if (found > 0) {
         memcpy(s_sensors, fresh, found * sizeof(managed_sensor_t));
