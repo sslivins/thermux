@@ -253,6 +253,7 @@
             <a href="#panel-network">🌐 Network</a>
             <a href="#panel-mqtt">🔗 MQTT</a>
             <a href="#panel-sensors">🌡️ Sensors</a>
+            <a href="#panel-modbus">🔌 Modbus</a>
             <a href="#panel-firmware">📦 Firmware</a>
             <a href="#panel-logs">📋 Logs</a>
             <a href="#panel-security">🔒 Security</a>
@@ -346,6 +347,34 @@
                     <div class="form-hint">Higher resolution = more precision but slower readings</div>
                 </div>
                 <button type="submit" class="btn btn-primary">💾 Save Sensor Settings</button>
+            </form>
+        </div>
+
+        <div class="config-section" id="panel-modbus">
+            <div class="section-title">
+                🔌 Modbus TCP
+                <span id="modbus-status" class="status-badge status-disconnected">Off</span>
+            </div>
+            <form id="modbus-form">
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 8px; color: #ccc; cursor: pointer;">
+                        <input type="checkbox" id="modbus-enabled" style="width: auto;">
+                        Enable Modbus TCP server
+                    </label>
+                    <div class="form-hint">Read-only. Lets controllers such as a PLC read temperatures with function code 04 (read input registers). Modbus has no password, so only enable it on a trusted network.</div>
+                </div>
+                <div class="form-group">
+                    <label for="modbus-port">Port</label>
+                    <input type="number" id="modbus-port" min="1" max="65535" placeholder="502">
+                    <div class="form-hint">502 is the standard Modbus port</div>
+                </div>
+                <div class="form-group">
+                    <label for="modbus-unit-id">Unit ID</label>
+                    <input type="number" id="modbus-unit-id" min="1" max="247" placeholder="1">
+                    <div class="form-hint">Requests for other unit IDs are ignored (0 and 255 are always accepted)</div>
+                </div>
+                <div class="current-value" id="modbus-info">Loading...</div>
+                <button type="submit" class="btn btn-primary">💾 Save Modbus Settings</button>
             </form>
         </div>
 
@@ -623,6 +652,8 @@
                 document.getElementById('publish-interval').value = sensor.publish_interval / 1000;
                 document.getElementById('resolution').value = sensor.resolution;
                 
+                await loadModbus();
+
                 /* Load auth config */
                 const authResp = await fetch('/api/config/auth', {cache: 'no-store'});
                 const auth = await authResp.json();
@@ -1072,6 +1103,72 @@
                 if (resp.ok) { showToast('MQTT settings saved'); loadConfig(); }
                 else { showToast('Failed to save MQTT settings', true); }
             } catch (err) { showToast('Error saving MQTT settings', true); }
+        });
+
+        /* === Modbus TCP === */
+        function renderModbus(mb) {
+            document.getElementById('modbus-enabled').checked = !!mb.enabled;
+            document.getElementById('modbus-port').value = mb.port;
+            document.getElementById('modbus-unit-id').value = mb.unit_id;
+
+            const badge = document.getElementById('modbus-status');
+            if (mb.running) {
+                badge.textContent = 'Running';
+                badge.className = 'status-badge status-connected';
+            } else if (mb.enabled && mb.error) {
+                badge.textContent = 'Error';
+                badge.className = 'status-badge status-disconnected';
+            } else {
+                badge.textContent = 'Off';
+                badge.className = 'status-badge status-disconnected';
+            }
+
+            const lines = [];
+            if (mb.error) lines.push(mb.error);
+            lines.push(`Slots in use: ${mb.slots_assigned} of ${mb.slot_capacity}`);
+            if (mb.sensors_without_slot > 0) {
+                lines.push(`${mb.sensors_without_slot} sensor(s) have no slot because all slots are in use`);
+            }
+            if (mb.running) {
+                lines.push(mb.last_request_age_s === null
+                    ? 'No requests yet'
+                    : `Requests served: ${mb.requests} (last ${formatAge(mb.last_request_age_s)})`);
+            }
+            document.getElementById('modbus-info').textContent = lines.join(' · ');
+        }
+
+        async function loadModbus() {
+            try {
+                const resp = await fetch('/api/modbus', {cache: 'no-store'});
+                if (checkAuthError(resp)) return;
+                if (resp.ok) renderModbus(await resp.json());
+            } catch (err) {
+                document.getElementById('modbus-info').textContent = 'Could not load Modbus settings';
+            }
+        }
+
+        document.getElementById('modbus-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const enabled = document.getElementById('modbus-enabled').checked;
+            const port = Number(document.getElementById('modbus-port').value);
+            const unitId = Number(document.getElementById('modbus-unit-id').value);
+            if (!Number.isInteger(port) || port < 1 || port > 65535) { showToast('Port must be between 1 and 65535', true); return; }
+            if (!Number.isInteger(unitId) || unitId < 1 || unitId > 247) { showToast('Unit ID must be between 1 and 247', true); return; }
+            try {
+                const resp = await fetch('/api/modbus', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled, port, unit_id: unitId })
+                });
+                if (checkAuthError(resp)) return;
+                const result = await resp.json().catch(() => ({}));
+                if (resp.ok) {
+                    showToast('Modbus settings saved');
+                } else {
+                    showToast(result.message || 'Failed to save Modbus settings', true);
+                }
+                if (result.port !== undefined) renderModbus(result);
+            } catch (err) { showToast('Error saving Modbus settings', true); }
         });
 
         document.getElementById('sensor-form').addEventListener('submit', async (e) => {

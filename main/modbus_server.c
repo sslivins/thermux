@@ -1,0 +1,540 @@
+/**
+ * @file modbus_server.c
+ * @brief Read-only Modbus TCP server (esp-modbus glue, settings, slot table)
+ *
+ * Locking:
+ *  - s_life_lock serializes start/stop/restart and register-image updates.
+ *  - s_state_lock guards the slot table, settings and status fields; only
+ *    held for short copies (never across NVS, network or esp-modbus calls).
+ *  - mbc_slave_lock() is held only while copying the finished image into
+ *    the registers esp-modbus serves.
+ */
+
+#include "modbus_server.h"
+#include "sensor_manager.h"
+
+#include "esp_app_desc.h"
+#include "esp_log.h"
+#include "esp_mac.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "mbcontroller.h"
+#include "mdns.h"
+#include "nvs.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static const char *TAG = "modbus";
+
+/* Same namespace as the rest of the settings, so factory reset clears these */
+#define NVS_NS              "temp_monitor"
+#define NVS_KEY_ENABLED     "mb_enabled"
+#define NVS_KEY_PORT        "mb_port"
+#define NVS_KEY_UID         "mb_uid"
+#define NVS_KEY_SLOTS       "mb_slots"
+
+#define MDNS_SERVICE        "_mbap"
+#define MDNS_PROTO          "_tcp"
+
+#define LIFE_LOCK_TIMEOUT_MS  3000
+#define DRAIN_WAIT_MS         500
+
+extern uint32_t get_sensor_read_interval(void);
+
+static SemaphoreHandle_t s_life_lock;
+static SemaphoreHandle_t s_state_lock;
+
+/* Registers served by esp-modbus; the area descriptors point into this */
+static modbus_regs_t s_regs;
+
+static void *s_handle;
+static TaskHandle_t s_drain_task;
+static volatile bool s_drain_stop;
+
+static modbus_config_t s_cfg = {
+    .enabled = false,
+    .port = MODBUS_DEFAULT_PORT,
+    .unit_id = MODBUS_DEFAULT_UNIT_ID,
+};
+static modbus_slot_table_t s_slots;
+static bool s_running;
+static char s_last_error[64];
+static uint32_t s_requests;
+static int64_t s_last_request_ms;
+static int s_without_slot;
+static uint8_t s_mac[6];
+static uint16_t s_fw_version[3];
+
+static inline int64_t uptime_ms(void) { return esp_timer_get_time() / 1000; }
+
+static void state_lock(void) { xSemaphoreTake(s_state_lock, portMAX_DELAY); }
+static void state_unlock(void) { xSemaphoreGive(s_state_lock); }
+
+/* ---- NVS ----------------------------------------------------------------- */
+
+static void load_config(modbus_config_t *cfg)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    uint8_t en = 0;
+    uint16_t port = 0;
+    uint8_t uid = 0;
+    if (nvs_get_u8(h, NVS_KEY_ENABLED, &en) == ESP_OK) {
+        cfg->enabled = en != 0;
+    }
+    if (nvs_get_u16(h, NVS_KEY_PORT, &port) == ESP_OK &&
+        nvs_get_u8(h, NVS_KEY_UID, &uid) == ESP_OK &&
+        modbus_config_valid(port, uid, CONFIG_WEB_SERVER_PORT)) {
+        cfg->port = port;
+        cfg->unit_id = uid;
+    }
+    nvs_close(h);
+}
+
+static esp_err_t save_config(const modbus_config_t *cfg)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_u8(h, NVS_KEY_ENABLED, cfg->enabled ? 1 : 0);
+    if (err == ESP_OK) err = nvs_set_u16(h, NVS_KEY_PORT, cfg->port);
+    if (err == ESP_OK) err = nvs_set_u8(h, NVS_KEY_UID, cfg->unit_id);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    return err;
+}
+
+static void load_slots(modbus_slot_table_t *table)
+{
+    memset(table, 0, sizeof(*table));
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    uint8_t *blob = malloc(MODBUS_SLOT_BLOB_SIZE);
+    size_t len = MODBUS_SLOT_BLOB_SIZE;
+    if (blob && nvs_get_blob(h, NVS_KEY_SLOTS, blob, &len) == ESP_OK) {
+        if (!modbus_slots_deserialize(table, blob, len)) {
+            ESP_LOGW(TAG, "Stored slot table is invalid; starting with an empty table");
+        }
+    }
+    free(blob);
+    nvs_close(h);
+}
+
+static esp_err_t save_slots(const modbus_slot_table_t *table)
+{
+    uint8_t *blob = malloc(MODBUS_SLOT_BLOB_SIZE);
+    if (blob == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    modbus_slots_serialize(table, blob);
+
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_blob(h, NVS_KEY_SLOTS, blob, MODBUS_SLOT_BLOB_SIZE);
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    free(blob);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save slot table: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+/* ---- mDNS ---------------------------------------------------------------- */
+
+static void mdns_advertise(const modbus_config_t *cfg)
+{
+    char unit[4];
+    char id[13];
+    snprintf(unit, sizeof(unit), "%u", cfg->unit_id);
+    snprintf(id, sizeof(id), "%02x%02x%02x%02x%02x%02x",
+             s_mac[0], s_mac[1], s_mac[2], s_mac[3], s_mac[4], s_mac[5]);
+    mdns_txt_item_t txt[] = {
+        {"unit", unit},
+        {"id", id},
+        {"map", "1"},
+    };
+    esp_err_t err = mdns_service_add("Thermux", MDNS_SERVICE, MDNS_PROTO, cfg->port, txt, 3);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS advertise failed: %s", esp_err_to_name(err));
+    }
+}
+
+static void mdns_withdraw(void)
+{
+    mdns_service_remove(MDNS_SERVICE, MDNS_PROTO);
+}
+
+/* ---- esp-modbus lifecycle -------------------------------------------------- */
+
+/* esp-modbus queues a notification per request and waits up to 10 ticks when
+ * the queue is full, so it must be drained. Doubles as a request counter. */
+static void drain_task(void *arg)
+{
+    void *handle = arg;
+    mb_param_info_t info;
+    while (!s_drain_stop) {
+        if (mbc_slave_get_param_info(handle, &info, DRAIN_WAIT_MS) == ESP_OK) {
+            state_lock();
+            s_requests++;
+            s_last_request_ms = uptime_ms();
+            state_unlock();
+        }
+    }
+    s_drain_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static esp_err_t add_area(void *handle, uint16_t start, void *addr, size_t bytes)
+{
+    mb_register_area_descriptor_t area = {
+        .start_offset = start,
+        .type = MB_PARAM_INPUT,
+        .access = MB_ACCESS_RO,
+        .address = addr,
+        .size = bytes,
+    };
+    return mbc_slave_set_descriptor(handle, area);
+}
+
+static void stop_locked(void)
+{
+    if (s_handle == NULL) {
+        return;
+    }
+    mdns_withdraw();
+
+    s_drain_stop = true;
+    for (int i = 0; i < (DRAIN_WAIT_MS / 50) + 10 && s_drain_task != NULL; i++) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (s_drain_task != NULL) {
+        ESP_LOGW(TAG, "Drain task did not exit; deleting it");
+        vTaskDelete(s_drain_task);
+        s_drain_task = NULL;
+    }
+
+    esp_err_t err = mbc_slave_delete(s_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mbc_slave_delete failed: %s", esp_err_to_name(err));
+    }
+    s_handle = NULL;
+
+    state_lock();
+    s_running = false;
+    state_unlock();
+    ESP_LOGI(TAG, "Modbus TCP server stopped");
+}
+
+static esp_err_t start_locked(const modbus_config_t *cfg)
+{
+    mb_communication_info_t comm;
+    memset(&comm, 0, sizeof(comm));
+    comm.tcp_opts.mode = MB_TCP;
+    comm.tcp_opts.port = cfg->port;
+    comm.tcp_opts.uid = cfg->unit_id;
+    /* Explicit IPv4 wildcard: with IPv6 enabled, an empty address can end up
+     * IPv6-only. Binding to all interfaces keeps working across Ethernet and
+     * Wi-Fi without a restart. */
+    comm.tcp_opts.addr_type = MB_IPV4;
+    comm.tcp_opts.ip_addr_table = (void *)"0.0.0.0";
+    comm.tcp_opts.ip_netif_ptr = NULL;
+
+    void *handle = NULL;
+    esp_err_t err = mbc_slave_create_tcp(&comm, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mbc_slave_create_tcp failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Only FC 0x04 (read input registers); everything else gets 0x01 */
+    static const uint8_t unsupported[] = {0x01, 0x02, 0x03, 0x05, 0x06, 0x0F, 0x10, 0x11, 0x17};
+    for (size_t i = 0; i < sizeof(unsupported); i++) {
+        mbc_delete_handler(handle, unsupported[i]);
+    }
+
+    if (err == ESP_OK) err = add_area(handle, MB_REG_INFO_START, s_regs.info, sizeof(s_regs.info));
+    if (err == ESP_OK) err = add_area(handle, MB_REG_TEMP_START, s_regs.temp, sizeof(s_regs.temp));
+    if (err == ESP_OK) err = add_area(handle, MB_REG_STATUS_START, s_regs.status, sizeof(s_regs.status));
+    if (err == ESP_OK) err = add_area(handle, MB_REG_AGE_START, s_regs.age, sizeof(s_regs.age));
+    if (err == ESP_OK) err = add_area(handle, MB_REG_ROM_START, s_regs.rom, sizeof(s_regs.rom));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set register areas: %s", esp_err_to_name(err));
+        mbc_slave_delete(handle);
+        return err;
+    }
+
+    err = mbc_slave_start(handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mbc_slave_start failed on port %u: %s", cfg->port, esp_err_to_name(err));
+        mbc_slave_delete(handle);
+        return err;
+    }
+
+    s_drain_stop = false;
+    if (xTaskCreate(drain_task, "mb_drain", 2560, handle, 3, &s_drain_task) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create drain task");
+        s_drain_task = NULL;
+        mbc_slave_delete(handle);
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_handle = handle;
+    mdns_advertise(cfg);
+
+    state_lock();
+    s_running = true;
+    s_requests = 0;
+    s_last_request_ms = 0;
+    state_unlock();
+
+    ESP_LOGI(TAG, "Modbus TCP server listening on port %u, unit ID %u", cfg->port, cfg->unit_id);
+    return ESP_OK;
+}
+
+static void set_last_error(esp_err_t err, const modbus_config_t *cfg)
+{
+    state_lock();
+    if (err == ESP_OK) {
+        s_last_error[0] = '\0';
+    } else {
+        snprintf(s_last_error, sizeof(s_last_error), "Could not start on port %u (%s)",
+                 cfg->port, esp_err_to_name(err));
+    }
+    state_unlock();
+}
+
+/* ---- Register image ------------------------------------------------------ */
+
+void modbus_server_update(void)
+{
+    if (s_life_lock == NULL) {
+        return;
+    }
+
+    int count = 0;
+    managed_sensor_t *snap = sensor_manager_snapshot(&count);
+    sensor_cycle_info_t cycle;
+    sensor_manager_get_cycle_info(&cycle);
+
+    modbus_sensor_input_t *inputs = NULL;
+    uint8_t (*roms)[MODBUS_ROM_LEN] = NULL;
+    if (count > 0 && snap != NULL) {
+        inputs = calloc(count, sizeof(*inputs));
+        roms = malloc((size_t)count * MODBUS_ROM_LEN);
+    }
+    if (count > 0 && (snap == NULL || inputs == NULL || roms == NULL)) {
+        ESP_LOGE(TAG, "Out of memory building the register image");
+        free(snap);
+        free(inputs);
+        free(roms);
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        const managed_sensor_t *s = &snap[i];
+        memcpy(inputs[i].rom, s->hw_sensor.address, MODBUS_ROM_LEN);
+        memcpy(roms[i], s->hw_sensor.address, MODBUS_ROM_LEN);
+        inputs[i].temperature = s->hw_sensor.temperature;
+        inputs[i].valid = s->hw_sensor.valid;
+        inputs[i].last_read_ms = s->hw_sensor.last_read_time;
+        inputs[i].last_attempt_ms = s->last_attempt_time;
+    }
+    free(snap);
+
+    modbus_slot_table_t *table = malloc(sizeof(*table));
+    modbus_regs_t *image = malloc(sizeof(*image));
+    if (table == NULL || image == NULL) {
+        ESP_LOGE(TAG, "Out of memory building the register image");
+        goto out;
+    }
+
+    int newly = 0;
+    state_lock();
+    int left_over = modbus_slots_auto_assign(&s_slots, (const uint8_t (*)[MODBUS_ROM_LEN])roms,
+                                             count, &newly);
+    bool full_changed = left_over != s_without_slot;
+    s_without_slot = left_over;
+    *table = s_slots;
+    state_unlock();
+
+    if (newly > 0) {
+        ESP_LOGI(TAG, "Assigned Modbus slots to %d new sensor(s)", newly);
+        save_slots(table);
+    }
+    if (full_changed && left_over > 0) {
+        ESP_LOGW(TAG, "Modbus slot table is full: %d sensor(s) have no slot", left_over);
+    }
+
+    modbus_info_input_t info = {
+        .fw_version = {s_fw_version[0], s_fw_version[1], s_fw_version[2]},
+        .uptime_s = (uint32_t)(esp_timer_get_time() / 1000000),
+        .max_sensors = CONFIG_MAX_SENSORS,
+        .cycle_count = cycle.cycle_count,
+        .last_result = (uint16_t)cycle.last_result,
+        .read_interval_ms = get_sensor_read_interval(),
+        .now_ms = uptime_ms(),
+    };
+    memcpy(info.mac, s_mac, sizeof(info.mac));
+    modbus_build_regs(image, table, inputs, count, &info);
+
+    if (xSemaphoreTake(s_life_lock, pdMS_TO_TICKS(LIFE_LOCK_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "Skipped register update: server is restarting");
+        goto out;
+    }
+    bool locked = s_handle != NULL && mbc_slave_lock(s_handle) == ESP_OK;
+    /* Cycle counter last, so a client bracketing its reads with register 5
+     * never pairs a new counter with old data */
+    uint16_t counter = image->info[MB_INFO_CYCLE_COUNT];
+    image->info[MB_INFO_CYCLE_COUNT] = s_regs.info[MB_INFO_CYCLE_COUNT];
+    memcpy(s_regs.temp, image->temp, sizeof(s_regs.temp));
+    memcpy(s_regs.status, image->status, sizeof(s_regs.status));
+    memcpy(s_regs.age, image->age, sizeof(s_regs.age));
+    memcpy(s_regs.rom, image->rom, sizeof(s_regs.rom));
+    memcpy(s_regs.info, image->info, sizeof(s_regs.info));
+    s_regs.info[MB_INFO_CYCLE_COUNT] = counter;
+    if (locked) {
+        mbc_slave_unlock(s_handle);
+    }
+    xSemaphoreGive(s_life_lock);
+
+out:
+    free(table);
+    free(image);
+    free(inputs);
+    free(roms);
+}
+
+/* ---- Public API ------------------------------------------------------------ */
+
+esp_err_t modbus_server_init(void)
+{
+    if (s_life_lock == NULL) {
+        s_life_lock = xSemaphoreCreateMutex();
+        s_state_lock = xSemaphoreCreateMutex();
+        if (s_life_lock == NULL || s_state_lock == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    esp_read_mac(s_mac, ESP_MAC_ETH);
+    modbus_parse_version(esp_app_get_description()->version, s_fw_version);
+
+    modbus_config_t cfg = s_cfg;
+    load_config(&cfg);
+    modbus_slot_table_t *table = malloc(sizeof(*table));
+    if (table == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    load_slots(table);
+
+    state_lock();
+    s_cfg = cfg;
+    s_slots = *table;
+    state_unlock();
+    free(table);
+
+    /* Fill the image before anyone can connect */
+    modbus_server_update();
+
+    if (!cfg.enabled) {
+        ESP_LOGI(TAG, "Modbus TCP server disabled");
+        return ESP_OK;
+    }
+
+    xSemaphoreTake(s_life_lock, portMAX_DELAY);
+    esp_err_t err = start_locked(&cfg);
+    xSemaphoreGive(s_life_lock);
+    set_last_error(err, &cfg);
+    return err;
+}
+
+esp_err_t modbus_server_apply_config(const modbus_config_t *cfg)
+{
+    if (cfg == NULL || !modbus_config_valid(cfg->port, cfg->unit_id, CONFIG_WEB_SERVER_PORT)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_life_lock == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_life_lock, pdMS_TO_TICKS(LIFE_LOCK_TIMEOUT_MS)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    state_lock();
+    modbus_config_t old = s_cfg;
+    bool was_running = s_running;
+    state_unlock();
+
+    bool restart = cfg->enabled != was_running ||
+                   (cfg->enabled && (cfg->port != old.port || cfg->unit_id != old.unit_id));
+
+    esp_err_t err = ESP_OK;
+    if (restart) {
+        stop_locked();
+        if (cfg->enabled) {
+            err = start_locked(cfg);
+            if (err != ESP_OK && was_running) {
+                ESP_LOGW(TAG, "Restoring previous Modbus settings");
+                esp_err_t back = start_locked(&old);
+                set_last_error(back, &old);
+            } else {
+                set_last_error(err, cfg);
+            }
+        } else {
+            set_last_error(ESP_OK, cfg);
+        }
+    }
+    xSemaphoreGive(s_life_lock);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    state_lock();
+    s_cfg = *cfg;
+    state_unlock();
+    return save_config(cfg);
+}
+
+void modbus_server_get_status(modbus_status_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (s_state_lock == NULL) {
+        out->config = s_cfg;
+        return;
+    }
+    state_lock();
+    out->config = s_cfg;
+    out->running = s_running;
+    strncpy(out->last_error, s_last_error, sizeof(out->last_error) - 1);
+    out->requests = s_requests;
+    out->last_request_ms = s_last_request_ms;
+    out->slots_assigned = modbus_slots_assigned_count(&s_slots);
+    out->sensors_without_slot = s_without_slot;
+    state_unlock();
+}
+
+int modbus_server_get_slot(const uint8_t *rom)
+{
+    if (s_state_lock == NULL) {
+        return -1;
+    }
+    state_lock();
+    int slot = modbus_slots_find(&s_slots, rom);
+    state_unlock();
+    return slot;
+}

@@ -25,6 +25,7 @@
 #include "wifi_manager.h"
 #include "onewire_temp.h"
 #include "sensor_manager.h"
+#include "modbus_server.h"
 #include "mqtt_client_ha.h"
 #include "web_server.h"
 #include "ota_updater.h"
@@ -164,6 +165,7 @@ static void temperature_task(void *pvParameters)
     while (1) {
         /* Read all connected sensors */
         sensor_manager_read_all();
+        modbus_server_update();
         
         vTaskDelay(pdMS_TO_TICKS(s_read_interval_ms));
     }
@@ -444,6 +446,9 @@ void app_main(void)
     /* Start web server */
     ESP_ERROR_CHECK(web_server_start());
     ESP_LOGD(TAG, "Web server started on port %d", CONFIG_WEB_SERVER_PORT);
+
+    /* Start the Modbus TCP server if enabled (failure is not fatal) */
+    modbus_server_init();
 
 #if CONFIG_OTA_ENABLED
     /* Initialize OTA updater */

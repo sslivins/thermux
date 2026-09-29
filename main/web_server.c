@@ -12,6 +12,7 @@
 #include "ethernet_manager.h"
 #include "log_buffer.h"
 #include "mqtt_client_ha.h"
+#include "modbus_server.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -427,6 +428,12 @@ static esp_err_t api_sensors_get_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(sensor, "count_remain", sensors[i].hw_sensor.count_remain);
         cJSON_AddNumberToObject(sensor, "count_per_c", sensors[i].hw_sensor.count_per_c);
         cJSON_AddNumberToObject(sensor, "conversion_time_ms", sensors[i].hw_sensor.conversion_time_ms);
+        int slot = modbus_server_get_slot(sensors[i].hw_sensor.address);
+        if (slot >= 0) {
+            cJSON_AddNumberToObject(sensor, "modbus_slot", slot);
+        } else {
+            cJSON_AddNullToObject(sensor, "modbus_slot");
+        }
         
         cJSON_AddItemToArray(root, sensor);
     }
@@ -2155,6 +2162,139 @@ static esp_err_t api_config_auth_regenerate_key_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/**
+ * @brief Add Modbus settings and runtime state to a JSON object
+ */
+static void add_modbus_status(cJSON *obj)
+{
+    modbus_status_t st;
+    modbus_server_get_status(&st);
+    cJSON_AddBoolToObject(obj, "enabled", st.config.enabled);
+    cJSON_AddNumberToObject(obj, "port", st.config.port);
+    cJSON_AddNumberToObject(obj, "unit_id", st.config.unit_id);
+    cJSON_AddBoolToObject(obj, "running", st.running);
+    if (st.last_error[0]) {
+        cJSON_AddStringToObject(obj, "error", st.last_error);
+    } else {
+        cJSON_AddNullToObject(obj, "error");
+    }
+    cJSON_AddNumberToObject(obj, "requests", st.requests);
+    if (st.last_request_ms > 0) {
+        int64_t age_s = (esp_timer_get_time() / 1000 - st.last_request_ms) / 1000;
+        cJSON_AddNumberToObject(obj, "last_request_age_s", (double)age_s);
+    } else {
+        cJSON_AddNullToObject(obj, "last_request_age_s");
+    }
+    cJSON_AddNumberToObject(obj, "map_version", MODBUS_MAP_VERSION);
+    cJSON_AddNumberToObject(obj, "slot_capacity", MODBUS_SLOT_COUNT);
+    cJSON_AddNumberToObject(obj, "slots_assigned", st.slots_assigned);
+    cJSON_AddNumberToObject(obj, "sensors_without_slot", st.sensors_without_slot);
+}
+
+static esp_err_t send_json(httpd_req_t *req, cJSON *root)
+{
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    return ESP_OK;
+}
+
+/**
+ * @brief Handler for GET /api/modbus
+ */
+static esp_err_t api_modbus_get_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    cJSON *root = cJSON_CreateObject();
+    add_modbus_status(root);
+    return send_json(req, root);
+}
+
+/**
+ * @brief Handler for POST /api/modbus
+ *
+ * Body: {"enabled": bool, "port": 1-65535, "unit_id": 1-247}; omitted
+ * fields keep their current value.
+ */
+static esp_err_t api_modbus_post_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    char content[160];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_FAIL;
+    }
+    content[ret] = '\0';
+
+    cJSON *body = cJSON_Parse(content);
+    if (body == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    modbus_status_t st;
+    modbus_server_get_status(&st);
+    modbus_config_t cfg = st.config;
+    bool bad = false;
+
+    cJSON *item = cJSON_GetObjectItem(body, "enabled");
+    if (item) {
+        if (cJSON_IsBool(item)) cfg.enabled = cJSON_IsTrue(item);
+        else bad = true;
+    }
+    item = cJSON_GetObjectItem(body, "port");
+    if (item) {
+        if (cJSON_IsNumber(item) && item->valuedouble >= 1 && item->valuedouble <= 65535 &&
+            item->valuedouble == (double)item->valueint) {
+            cfg.port = (uint16_t)item->valueint;
+        } else {
+            bad = true;
+        }
+    }
+    item = cJSON_GetObjectItem(body, "unit_id");
+    if (item) {
+        if (cJSON_IsNumber(item) && item->valuedouble >= 1 && item->valuedouble <= 247 &&
+            item->valuedouble == (double)item->valueint) {
+            cfg.unit_id = (uint8_t)item->valueint;
+        } else {
+            bad = true;
+        }
+    }
+    cJSON_Delete(body);
+
+    if (bad || !modbus_config_valid(cfg.port, cfg.unit_id, CONFIG_WEB_SERVER_PORT)) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddBoolToObject(resp, "success", false);
+        cJSON_AddStringToObject(resp, "message",
+            "Port must be 1-65535 (not the web server port) and unit ID 1-247");
+        return send_json(req, resp);
+    }
+
+    esp_err_t err = modbus_server_apply_config(&cfg);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "success", err == ESP_OK);
+    if (err == ESP_OK) {
+        cJSON_AddStringToObject(resp, "message", "Modbus settings saved");
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        char msg[96];
+        snprintf(msg, sizeof(msg), "Could not apply Modbus settings (%s); previous settings kept",
+                 esp_err_to_name(err));
+        cJSON_AddStringToObject(resp, "message", msg);
+    }
+    add_modbus_status(resp);
+    return send_json(req, resp);
+}
+
 esp_err_t web_server_start(void)
 {
     /* Load auth config from NVS */
@@ -2165,7 +2305,10 @@ esp_err_t web_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = CONFIG_WEB_SERVER_PORT;
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 40;  /* 34 endpoints + room for future */
+    /* Reuse the oldest connection instead of refusing new ones when all
+     * sockets are busy (the socket budget is shared with Modbus TCP) */
+    config.lru_purge_enable = true;
+    config.max_uri_handlers = 44;  /* 38 endpoints + room for future */
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
@@ -2391,6 +2534,21 @@ esp_err_t web_server_start(void)
         .handler = api_config_sensor_post_handler,
     };
     REGISTER_URI(sensor_config_post_uri);
+
+    /* Modbus TCP endpoints */
+    httpd_uri_t modbus_get_uri = {
+        .uri = "/api/modbus",
+        .method = HTTP_GET,
+        .handler = api_modbus_get_handler,
+    };
+    REGISTER_URI(modbus_get_uri);
+
+    httpd_uri_t modbus_post_uri = {
+        .uri = "/api/modbus",
+        .method = HTTP_POST,
+        .handler = api_modbus_post_handler,
+    };
+    REGISTER_URI(modbus_post_uri);
 
     /* System endpoints */
     httpd_uri_t system_restart_uri = {
