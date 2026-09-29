@@ -45,6 +45,12 @@ static const char *TAG = "modbus";
 
 extern uint32_t get_sensor_read_interval(void);
 
+/* esp-modbus hands handlers a pointer to the PDU inside the received MBAP
+ * frame, so the MBAP unit ID is the byte just before it (MB_TCP_UID = 6,
+ * MB_TCP_FUNC = 7 in esp-modbus 2.1.3). The reply reuses that header, so the
+ * client's unit ID is echoed back. */
+#define MBAP_UID_BEFORE_PDU 1
+
 static SemaphoreHandle_t s_life_lock;
 static SemaphoreHandle_t s_state_lock;
 
@@ -52,6 +58,8 @@ static SemaphoreHandle_t s_state_lock;
 static modbus_regs_t s_regs;
 
 static void *s_handle;
+static mb_fn_handler_fp s_default_fc04;
+static volatile uint8_t s_active_uid;
 static TaskHandle_t s_drain_task;
 static volatile bool s_drain_stop;
 
@@ -240,12 +248,26 @@ static void stop_locked(void)
     ESP_LOGI(TAG, "Modbus TCP server stopped");
 }
 
+/* Runs in the esp-modbus task for every FC 0x04 request */
+static mb_exception_t fc04_uid_guard(void *inst, uint8_t *frame, uint16_t *len)
+{
+    uint8_t uid = frame[-MBAP_UID_BEFORE_PDU];
+    if (!modbus_unit_id_accepted(uid, s_active_uid)) {
+        return MB_EX_GATEWAY_TGT_FAILED;
+    }
+    return s_default_fc04(inst, frame, len);
+}
+
 static esp_err_t start_locked(const modbus_config_t *cfg)
 {
     mb_communication_info_t comm;
     memset(&comm, 0, sizeof(comm));
     comm.tcp_opts.mode = MB_TCP;
     comm.tcp_opts.port = cfg->port;
+    /* Unit ID filtering is done by fc04_uid_guard(), with FMB_TCP_UID_ENABLED
+     * off so esp-modbus accepts every frame. esp-modbus 2.1.3 wedges for good
+     * if it drops a frame for a foreign unit ID itself: the transaction
+     * resource is never released and every later request goes unanswered. */
     comm.tcp_opts.uid = cfg->unit_id;
     /* Explicit IPv4 wildcard: with IPv6 enabled, an empty address can end up
      * IPv6-only. Binding to all interfaces keeps working across Ethernet and
@@ -265,6 +287,16 @@ static esp_err_t start_locked(const modbus_config_t *cfg)
     static const uint8_t unsupported[] = {0x01, 0x02, 0x03, 0x05, 0x06, 0x0F, 0x10, 0x11, 0x17};
     for (size_t i = 0; i < sizeof(unsupported); i++) {
         mbc_delete_handler(handle, unsupported[i]);
+    }
+
+    s_active_uid = cfg->unit_id;
+    err = mbc_get_handler(handle, 0x04, &s_default_fc04);
+    if (err == ESP_OK && s_default_fc04 == NULL) err = ESP_ERR_NOT_FOUND;
+    if (err == ESP_OK) err = mbc_set_handler(handle, 0x04, fc04_uid_guard);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to install unit ID filter: %s", esp_err_to_name(err));
+        mbc_slave_delete(handle);
+        return err;
     }
 
     if (err == ESP_OK) err = add_area(handle, MB_REG_INFO_START, s_regs.info, sizeof(s_regs.info));
