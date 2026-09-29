@@ -157,6 +157,11 @@ bool modbus_config_valid(uint32_t port, uint32_t unit_id, uint32_t reserved_port
            unit_id >= 1 && unit_id <= 247;
 }
 
+bool modbus_unit_id_accepted(uint8_t request_uid, uint8_t configured_uid)
+{
+    return request_uid == configured_uid || request_uid == 0 || request_uid == 255;
+}
+
 int modbus_slots_find(const modbus_slot_table_t *table, const uint8_t *rom)
 {
     for (int s = 0; s < MODBUS_SLOT_COUNT; s++) {

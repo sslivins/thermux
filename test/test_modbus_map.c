@@ -385,8 +385,19 @@ void test_modbus_crc32_known_value(void)
     TEST_ASSERT_EQUAL_HEX32(0xCBF43926u, modbus_crc32(msg, 9));
 }
 
+void test_modbus_unit_id_accepted(void)
+{
+    TEST_ASSERT_TRUE(modbus_unit_id_accepted(1, 1));
+    TEST_ASSERT_TRUE(modbus_unit_id_accepted(0, 1));
+    TEST_ASSERT_TRUE(modbus_unit_id_accepted(255, 1));
+    TEST_ASSERT_TRUE(modbus_unit_id_accepted(247, 247));
+    TEST_ASSERT_FALSE(modbus_unit_id_accepted(2, 1));
+    TEST_ASSERT_FALSE(modbus_unit_id_accepted(1, 247));
+}
+
 void run_modbus_map_tests(void)
 {
+    RUN_TEST(test_modbus_unit_id_accepted);
     RUN_TEST(test_modbus_temp_rounding_and_sign);
     RUN_TEST(test_modbus_temp_clamps_and_never_returns_invalid_marker);
     RUN_TEST(test_modbus_age);

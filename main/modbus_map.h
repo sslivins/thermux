@@ -147,6 +147,12 @@ void modbus_build_regs(modbus_regs_t *out,
 /** Port 1-65535 other than @p reserved_port, unit ID 1-247 */
 bool modbus_config_valid(uint32_t port, uint32_t unit_id, uint32_t reserved_port);
 
+/** Whether a request addressed to @p request_uid is for this server.
+ *  0 and 255 are the conventional "direct connection" unit IDs and are always
+ *  accepted here, although esp-modbus 2.1.3 drops unit IDs above 247 at the
+ *  socket layer, so 255 never reaches the handler in practice. */
+bool modbus_unit_id_accepted(uint8_t request_uid, uint8_t configured_uid);
+
 /* ---- Slot table ---------------------------------------------------------- */
 
 /** Slot index holding @p rom, or -1 */
