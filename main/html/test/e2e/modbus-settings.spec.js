@@ -20,7 +20,7 @@ test.describe('Modbus TCP settings', () => {
         mock = await startMockServer();
         Object.assign(mock.state.modbus, {
             enabled: true, running: true, port: 1502, unit_id: 7,
-            slots_assigned: 12, requests: 40, last_request_age_s: 3,
+            channels_assigned: 12, requests: 40, last_request_age_s: 3,
         });
         await page.goto(`${mock.baseURL}/config`);
 
@@ -28,16 +28,16 @@ test.describe('Modbus TCP settings', () => {
         await expect(page.locator('#modbus-enabled')).toBeChecked();
         await expect(page.locator('#modbus-port')).toHaveValue('1502');
         await expect(page.locator('#modbus-unit-id')).toHaveValue('7');
-        await expect(page.locator('#modbus-info')).toContainText('Slots in use: 12 of 100');
+        await expect(page.locator('#modbus-info')).toContainText('Channels in use: 12 of 100');
         await expect(page.locator('#modbus-info')).toContainText('Requests served: 40');
     });
 
-    test('warns when sensors have no slot', async ({ page }) => {
+    test('warns when sensors have no channel', async ({ page }) => {
         mock = await startMockServer();
-        Object.assign(mock.state.modbus, { slots_assigned: 100, sensors_without_slot: 2 });
+        Object.assign(mock.state.modbus, { channels_assigned: 100, sensors_without_channel: 2 });
         await page.goto(`${mock.baseURL}/config`);
 
-        await expect(page.locator('#modbus-info')).toContainText('2 sensor(s) have no slot');
+        await expect(page.locator('#modbus-info')).toContainText('2 sensor(s) have no channel');
     });
 
     test('saving sends enabled, port and unit ID', async ({ page }) => {

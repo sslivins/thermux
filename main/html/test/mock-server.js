@@ -69,14 +69,14 @@ function defaultState() {
             requests: 0,
             last_request_age_s: null,
             map_version: 1,
-            slot_capacity: 100,
-            slots_assigned: 0,
-            sensors_without_slot: 0,
+            channel_capacity: 100,
+            channels_assigned: 0,
+            sensors_without_channel: 0,
         },
         /** When set, POST /api/modbus fails with this message (simulates a port that won't bind) */
         modbusFailMessage: null,
-        /** Assigned Modbus slots, as returned by GET /api/modbus/slots */
-        modbusSlots: [],
+        /** Assigned Modbus channels, as returned by GET /api/modbus/channels */
+        modbusChannels: [],
         otaStatus: {
             checking: false,
             result: 1,
@@ -94,7 +94,7 @@ function defaultState() {
             device_version: '3.0.0',
             sensor_names: [],
             sensor_settings: { read_interval_ms: 10000, publish_interval_ms: 30000, resolution: 12 },
-            modbus: { enabled: false, port: 502, unit_id: 1, slots: [] },
+            modbus: { enabled: false, port: 502, unit_id: 1, channels: [] },
         },
     };
 }
@@ -201,10 +201,10 @@ function createMockServer() {
             state.modbus.running = state.modbus.enabled;
             return sendJson(res, 200, { success: true, message: 'Modbus settings saved', ...state.modbus });
         }
-        if (req.method === 'GET' && url.pathname === '/api/modbus/slots') {
-            return sendJson(res, 200, { slot_capacity: 100, slots: state.modbusSlots });
+        if (req.method === 'GET' && url.pathname === '/api/modbus/channels') {
+            return sendJson(res, 200, { channel_capacity: 100, channels: state.modbusChannels });
         }
-        if (req.method === 'POST' && url.pathname === '/api/modbus/slots') {
+        if (req.method === 'POST' && url.pathname === '/api/modbus/channels') {
             let parsed;
             try {
                 parsed = JSON.parse(body);
@@ -212,27 +212,27 @@ function createMockServer() {
                 return sendJson(res, 400, { error: 'Invalid JSON' });
             }
             const reply = (status, success, message) => sendJson(res, status, {
-                success, message, slot_capacity: 100, slots: state.modbusSlots,
+                success, message, channel_capacity: 100, channels: state.modbusChannels,
             });
             if (parsed.action === 'move') {
-                const src = state.modbusSlots.find((s) => s.slot === parsed.from);
-                if (!src) return reply(400, false, `Slot ${parsed.from} has no sensor`);
-                const dst = state.modbusSlots.find((s) => s.slot === parsed.to);
+                const src = state.modbusChannels.find((s) => s.channel === parsed.from);
+                if (!src) return reply(400, false, `Channel ${parsed.from} has no sensor`);
+                const dst = state.modbusChannels.find((s) => s.channel === parsed.to);
                 if (dst) {
-                    dst.slot = parsed.from;
+                    dst.channel = parsed.from;
                     dst.temp_register = 100 + parsed.from;
                 }
-                src.slot = parsed.to;
+                src.channel = parsed.to;
                 src.temp_register = 100 + parsed.to;
-                state.modbusSlots.sort((a, b) => a.slot - b.slot);
-                return reply(200, true, `Moved slot ${parsed.from} to slot ${parsed.to}`);
+                state.modbusChannels.sort((a, b) => a.channel - b.channel);
+                return reply(200, true, `Moved channel ${parsed.from} to channel ${parsed.to}`);
             }
             if (parsed.action === 'release') {
-                const s = state.modbusSlots.find((x) => x.slot === parsed.slot);
-                if (!s) return reply(400, false, `Slot ${parsed.slot} has no sensor`);
+                const s = state.modbusChannels.find((x) => x.channel === parsed.channel);
+                if (!s) return reply(400, false, `Channel ${parsed.channel} has no sensor`);
                 if (s.present) return reply(400, false, 'That sensor is still connected; only missing sensors can be released');
-                state.modbusSlots = state.modbusSlots.filter((x) => x !== s);
-                return reply(200, true, `Released slot ${parsed.slot}`);
+                state.modbusChannels = state.modbusChannels.filter((x) => x !== s);
+                return reply(200, true, `Released channel ${parsed.channel}`);
             }
             return reply(400, false, 'Action must be "move" or "release"');
         }

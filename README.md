@@ -147,44 +147,44 @@ Thermux can run a small, **read-only** Modbus TCP server so a PLC or heat pump c
 
 Modbus has no password. Anyone on the network can read the registers, but nothing can be changed over Modbus, so only enable it on a network you trust.
 
-### Sensor slots
+### Sensor channels
 
-Each sensor gets a **slot** (0–99) the first time it's seen, keyed by its ROM ID. A sensor keeps its slot when other sensors are added or removed, so a register address always refers to the same physical sensor. New sensors fill the lowest free slots, in ROM ID order.
+Each sensor gets a **channel** (0–99) the first time it's seen, keyed by its ROM ID. A sensor keeps its channel when other sensors are added or removed, so a register address always refers to the same physical sensor. New sensors fill the lowest free channels, in ROM ID order.
 
-The slot table on the settings page shows each slot's register, sensor, and the status and temperature Modbus clients are currently reading. From there you can:
+The channel table on the settings page shows each channel's register, sensor, and the status and temperature Modbus clients are currently reading. From there you can:
 
-- **Move** a sensor to another slot. If that slot is in use, the two sensors swap.
-- **Release** the slot of a sensor that has been disconnected, so the slot can be reused. Slots of connected sensors can't be released; they would just be reassigned on the next read.
+- **Move** a sensor to another channel. If that channel is in use, the two sensors swap.
+- **Release** the channel of a sensor that has been disconnected, so the channel can be reused. Channels of connected sensors can't be released; they would just be reassigned on the next read.
 
-Slots and Modbus settings are included in backups (**Settings → Backup**), so a replacement Thermux can serve the same register map.
+Channels and Modbus settings are included in backups (**Settings → Backup**), so a replacement Thermux can serve the same register map.
 
 ### Register map
 
-All registers are **input registers**, read with function code 04. Addresses are zero-based. All 100 slots are always mapped, whatever `CONFIG_MAX_SENSORS` is set to, so the map never changes between builds.
+All registers are **input registers**, read with function code 04. Addresses are zero-based. All 100 channels are always mapped, whatever `CONFIG_MAX_SENSORS` is set to, so the map never changes between builds.
 
 | Address | Contents |
 |---------|----------|
 | 0 | Map version (currently 1) |
 | 1–3 | Firmware version: major, minor, patch |
-| 4 | Slot capacity (always 100) |
+| 4 | Channel capacity (always 100) |
 | 5 | Read-cycle counter. Goes up by one after every scheduled read attempt, including failed ones; wraps at 65535 |
 | 6–7 | Uptime in seconds (32-bit, register 6 is the high word) |
 | 8–10 | Ethernet MAC address, two bytes per register (register 8 = byte 0 << 8 \| byte 1) |
 | 11 | Firmware sensor limit (`CONFIG_MAX_SENSORS`) |
-| 12 | Number of slots in use |
+| 12 | Number of channels in use |
 | 13 | Number of sensors found on the bus |
 | 14 | Result of the last read cycle: 0 OK, 1 some sensors failed, 2 bus failure, 3 no sensors |
 | 15 | Read interval in seconds |
-| 100 + slot | Temperature in hundredths of a °C, signed 16-bit (2150 = 21.50 °C, 0xFF38 = −2.00 °C). **0x8000 whenever the status isn't OK** |
-| 200 + slot | Status (see below) |
-| 300 + slot | Seconds since the last successful read (capped at 65534). 65535 if the sensor has never been read or isn't connected |
-| 1000 + 4 × slot | ROM ID, 4 registers per slot, two bytes per register in the same order as the address shown in the UI and API |
+| 100 + channel | Temperature in hundredths of a °C, signed 16-bit (2150 = 21.50 °C, 0xFF38 = −2.00 °C). **0x8000 whenever the status isn't OK** |
+| 200 + channel | Status (see below) |
+| 300 + channel | Seconds since the last successful read (capped at 65534). 65535 if the sensor has never been read or isn't connected |
+| 1000 + 4 × channel | ROM ID, 4 registers per channel, two bytes per register in the same order as the address shown in the UI and API |
 
-Slot status, checked in this order:
+Channel status, checked in this order:
 
 | Value | Meaning |
 |-------|---------|
-| 1 | Unassigned: no sensor in this slot |
+| 1 | Unassigned: no sensor in this channel |
 | 2 | Missing: the sensor wasn't found in the latest bus scan |
 | 3 | Read error: the sensor's latest read failed, or the whole read cycle failed |
 | 4 | Stale: never read successfully, or the last good reading is older than 3 × the read interval (at least 30 s) |
@@ -212,7 +212,7 @@ While the server is running, Thermux advertises it over mDNS as `_mbap._tcp`, wi
 
 ### Examples
 
-[mbpoll](https://github.com/epsilonrt/mbpoll), temperatures of slots 0–5 (`-0` makes addresses zero-based):
+[mbpoll](https://github.com/epsilonrt/mbpoll), temperatures of channels 0–5 (`-0` makes addresses zero-based):
 
 ```bash
 mbpoll -m tcp -a 1 -0 -t 3 -r 100 -c 6 -1 thermux.local
@@ -239,10 +239,10 @@ while True:
     if read(5, 1)[0] == cycle:
         break
 
-for slot, (raw, st) in enumerate(zip(temps, status)):
+for channel, (raw, st) in enumerate(zip(temps, status)):
     if st == 0:
         celsius = (raw - 65536 if raw >= 32768 else raw) / 100
-        print(f"slot {slot}: {celsius:.2f} °C")
+        print(f"channel {channel}: {celsius:.2f} °C")
 ```
 
 ## OTA Updates

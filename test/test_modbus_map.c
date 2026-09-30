@@ -1,6 +1,6 @@
 /**
  * @file test_modbus_map.c
- * @brief Unit tests for the Modbus register map, slot status and slot table
+ * @brief Unit tests for the Modbus register map, channel status and channel table
  */
 
 #include "unity.h"
@@ -93,67 +93,67 @@ void test_modbus_parse_version(void)
 void test_modbus_status_precedence(void)
 {
     const int64_t now = 100000;
-    modbus_slot_t slot = {0};
+    modbus_channel_t channel = {0};
     modbus_sensor_input_t s = good_sensor(1, 20.0f, now);
 
-    TEST_ASSERT_EQUAL(MB_STATUS_UNASSIGNED, modbus_slot_status(&slot, &s, MB_CYCLE_OK, now, 10000));
+    TEST_ASSERT_EQUAL(MB_STATUS_UNASSIGNED, modbus_channel_status(&channel, &s, MB_CYCLE_OK, now, 10000));
 
-    slot.assigned = true;
-    memcpy(slot.rom, s.rom, MODBUS_ROM_LEN);
-    TEST_ASSERT_EQUAL(MB_STATUS_MISSING, modbus_slot_status(&slot, NULL, MB_CYCLE_OK, now, 10000));
-    TEST_ASSERT_EQUAL(MB_STATUS_OK, modbus_slot_status(&slot, &s, MB_CYCLE_OK, now, 10000));
+    channel.assigned = true;
+    memcpy(channel.rom, s.rom, MODBUS_ROM_LEN);
+    TEST_ASSERT_EQUAL(MB_STATUS_MISSING, modbus_channel_status(&channel, NULL, MB_CYCLE_OK, now, 10000));
+    TEST_ASSERT_EQUAL(MB_STATUS_OK, modbus_channel_status(&channel, &s, MB_CYCLE_OK, now, 10000));
 
     /* Whole-cycle failure beats a sensor's own good reading */
-    TEST_ASSERT_EQUAL(MB_STATUS_READ_ERROR, modbus_slot_status(&slot, &s, MB_CYCLE_FAILED, now, 10000));
+    TEST_ASSERT_EQUAL(MB_STATUS_READ_ERROR, modbus_channel_status(&channel, &s, MB_CYCLE_FAILED, now, 10000));
 
     /* Partial cycle: only the failed sensor is READ_ERROR */
-    TEST_ASSERT_EQUAL(MB_STATUS_OK, modbus_slot_status(&slot, &s, MB_CYCLE_PARTIAL, now, 10000));
+    TEST_ASSERT_EQUAL(MB_STATUS_OK, modbus_channel_status(&channel, &s, MB_CYCLE_PARTIAL, now, 10000));
     s.valid = false;
-    TEST_ASSERT_EQUAL(MB_STATUS_READ_ERROR, modbus_slot_status(&slot, &s, MB_CYCLE_PARTIAL, now, 10000));
+    TEST_ASSERT_EQUAL(MB_STATUS_READ_ERROR, modbus_channel_status(&channel, &s, MB_CYCLE_PARTIAL, now, 10000));
 }
 
 void test_modbus_status_never_read_is_stale(void)
 {
     const int64_t now = 100000;
-    modbus_slot_t slot = {0};
+    modbus_channel_t channel = {0};
     modbus_sensor_input_t s;
     memset(&s, 0, sizeof(s));
     make_rom(s.rom, 3);
-    slot.assigned = true;
-    memcpy(slot.rom, s.rom, MODBUS_ROM_LEN);
+    channel.assigned = true;
+    memcpy(channel.rom, s.rom, MODBUS_ROM_LEN);
     /* Just discovered, no read attempt yet */
-    TEST_ASSERT_EQUAL(MB_STATUS_STALE, modbus_slot_status(&slot, &s, MB_CYCLE_OK, now, 10000));
+    TEST_ASSERT_EQUAL(MB_STATUS_STALE, modbus_channel_status(&channel, &s, MB_CYCLE_OK, now, 10000));
 }
 
 void test_modbus_status_stale_after_limit(void)
 {
     const int64_t now = 1000000;
-    modbus_slot_t slot = {0};
+    modbus_channel_t channel = {0};
     modbus_sensor_input_t s = good_sensor(1, 20.0f, now);
-    slot.assigned = true;
-    memcpy(slot.rom, s.rom, MODBUS_ROM_LEN);
+    channel.assigned = true;
+    memcpy(channel.rom, s.rom, MODBUS_ROM_LEN);
 
     s.last_read_ms = now - 30000;
-    TEST_ASSERT_EQUAL(MB_STATUS_OK, modbus_slot_status(&slot, &s, MB_CYCLE_OK, now, 10000));
+    TEST_ASSERT_EQUAL(MB_STATUS_OK, modbus_channel_status(&channel, &s, MB_CYCLE_OK, now, 10000));
     s.last_read_ms = now - 30001;
-    TEST_ASSERT_EQUAL(MB_STATUS_STALE, modbus_slot_status(&slot, &s, MB_CYCLE_OK, now, 10000));
+    TEST_ASSERT_EQUAL(MB_STATUS_STALE, modbus_channel_status(&channel, &s, MB_CYCLE_OK, now, 10000));
     /* A 60 s interval allows 180 s */
     s.last_read_ms = now - 170000;
-    TEST_ASSERT_EQUAL(MB_STATUS_OK, modbus_slot_status(&slot, &s, MB_CYCLE_OK, now, 60000));
+    TEST_ASSERT_EQUAL(MB_STATUS_OK, modbus_channel_status(&channel, &s, MB_CYCLE_OK, now, 60000));
 }
 
 /* ---- register image ---- */
 
 void test_modbus_build_regs_info_block(void)
 {
-    modbus_slot_table_t table;
+    modbus_channel_table_t table;
     memset(&table, 0, sizeof(table));
     modbus_sensor_input_t sensors[2] = {good_sensor(1, 20.0f, 50000), good_sensor(2, 21.0f, 50000)};
     int assigned = 0;
     uint8_t roms[2][MODBUS_ROM_LEN];
     memcpy(roms[0], sensors[0].rom, MODBUS_ROM_LEN);
     memcpy(roms[1], sensors[1].rom, MODBUS_ROM_LEN);
-    modbus_slots_auto_assign(&table, (const uint8_t (*)[MODBUS_ROM_LEN])roms, 2, &assigned);
+    modbus_channels_auto_assign(&table, (const uint8_t (*)[MODBUS_ROM_LEN])roms, 2, &assigned);
 
     modbus_info_input_t info = {
         .fw_version = {2, 11, 4},
@@ -172,7 +172,7 @@ void test_modbus_build_regs_info_block(void)
     TEST_ASSERT_EQUAL_UINT16(2, regs.info[MB_INFO_FW_MAJOR]);
     TEST_ASSERT_EQUAL_UINT16(11, regs.info[MB_INFO_FW_MINOR]);
     TEST_ASSERT_EQUAL_UINT16(4, regs.info[MB_INFO_FW_PATCH]);
-    TEST_ASSERT_EQUAL_UINT16(100, regs.info[MB_INFO_SLOT_CAPACITY]);
+    TEST_ASSERT_EQUAL_UINT16(100, regs.info[MB_INFO_CHANNEL_CAPACITY]);
     TEST_ASSERT_EQUAL_UINT16(5, regs.info[MB_INFO_CYCLE_COUNT]);
     TEST_ASSERT_EQUAL_HEX16(0x0001, regs.info[MB_INFO_UPTIME_HI]);
     TEST_ASSERT_EQUAL_HEX16(0x2345, regs.info[MB_INFO_UPTIME_LO]);
@@ -180,30 +180,30 @@ void test_modbus_build_regs_info_block(void)
     TEST_ASSERT_EQUAL_HEX16(0xCCDD, regs.info[MB_INFO_MAC_0 + 1]);
     TEST_ASSERT_EQUAL_HEX16(0xEEFF, regs.info[MB_INFO_MAC_0 + 2]);
     TEST_ASSERT_EQUAL_UINT16(20, regs.info[MB_INFO_MAX_SENSORS]);
-    TEST_ASSERT_EQUAL_UINT16(2, regs.info[MB_INFO_SLOTS_ASSIGNED]);
+    TEST_ASSERT_EQUAL_UINT16(2, regs.info[MB_INFO_CHANNELS_ASSIGNED]);
     TEST_ASSERT_EQUAL_UINT16(2, regs.info[MB_INFO_SENSORS_PRESENT]);
     TEST_ASSERT_EQUAL_UINT16(MB_CYCLE_PARTIAL, regs.info[MB_INFO_LAST_RESULT]);
     TEST_ASSERT_EQUAL_UINT16(10, regs.info[MB_INFO_READ_INTERVAL_S]);
 }
 
-void test_modbus_build_regs_slots(void)
+void test_modbus_build_regs_channels(void)
 {
     const int64_t now = 50000;
-    modbus_slot_table_t table;
+    modbus_channel_table_t table;
     memset(&table, 0, sizeof(table));
 
     modbus_sensor_input_t present = good_sensor(1, 21.5f, now);
     modbus_sensor_input_t failed = good_sensor(2, 99.0f, now);
     failed.valid = false;
 
-    table.slots[0].assigned = true;
-    memcpy(table.slots[0].rom, present.rom, MODBUS_ROM_LEN);
-    table.slots[1].assigned = true;
-    memcpy(table.slots[1].rom, failed.rom, MODBUS_ROM_LEN);
-    table.slots[99].assigned = true;
-    make_rom(table.slots[99].rom, 77); /* not on the bus */
+    table.channels[0].assigned = true;
+    memcpy(table.channels[0].rom, present.rom, MODBUS_ROM_LEN);
+    table.channels[1].assigned = true;
+    memcpy(table.channels[1].rom, failed.rom, MODBUS_ROM_LEN);
+    table.channels[99].assigned = true;
+    make_rom(table.channels[99].rom, 77); /* not on the bus */
 
-    modbus_sensor_input_t sensors[2] = {failed, present}; /* bus order != slot order */
+    modbus_sensor_input_t sensors[2] = {failed, present}; /* bus order != channel order */
     modbus_info_input_t info = {.read_interval_ms = 10000, .now_ms = now, .last_result = MB_CYCLE_PARTIAL};
     modbus_regs_t regs;
     modbus_build_regs(&regs, &table, sensors, 2, &info);
@@ -231,11 +231,11 @@ void test_modbus_build_regs_slots(void)
 void test_modbus_build_regs_bus_failure_invalidates_all(void)
 {
     const int64_t now = 50000;
-    modbus_slot_table_t table;
+    modbus_channel_table_t table;
     memset(&table, 0, sizeof(table));
     modbus_sensor_input_t s = good_sensor(1, 20.0f, now);
-    table.slots[0].assigned = true;
-    memcpy(table.slots[0].rom, s.rom, MODBUS_ROM_LEN);
+    table.channels[0].assigned = true;
+    memcpy(table.channels[0].rom, s.rom, MODBUS_ROM_LEN);
     modbus_info_input_t info = {.read_interval_ms = 10000, .now_ms = now, .last_result = MB_CYCLE_FAILED};
     modbus_regs_t regs;
     modbus_build_regs(&regs, &table, &s, 1, &info);
@@ -245,7 +245,7 @@ void test_modbus_build_regs_bus_failure_invalidates_all(void)
     TEST_ASSERT_EQUAL_UINT16(1, regs.age[0]);
 }
 
-/* ---- slot table ---- */
+/* ---- channel table ---- */
 
 void test_modbus_auto_assign_is_order_independent(void)
 {
@@ -253,130 +253,130 @@ void test_modbus_auto_assign_is_order_independent(void)
     make_rom(a[0], 9); make_rom(a[1], 2); make_rom(a[2], 5);
     make_rom(b[0], 5); make_rom(b[1], 9); make_rom(b[2], 2);
 
-    modbus_slot_table_t ta, tb;
+    modbus_channel_table_t ta, tb;
     memset(&ta, 0, sizeof(ta));
     memset(&tb, 0, sizeof(tb));
     int na = 0, nb = 0;
-    TEST_ASSERT_EQUAL_INT(0, modbus_slots_auto_assign(&ta, (const uint8_t (*)[MODBUS_ROM_LEN])a, 3, &na));
-    TEST_ASSERT_EQUAL_INT(0, modbus_slots_auto_assign(&tb, (const uint8_t (*)[MODBUS_ROM_LEN])b, 3, &nb));
+    TEST_ASSERT_EQUAL_INT(0, modbus_channels_auto_assign(&ta, (const uint8_t (*)[MODBUS_ROM_LEN])a, 3, &na));
+    TEST_ASSERT_EQUAL_INT(0, modbus_channels_auto_assign(&tb, (const uint8_t (*)[MODBUS_ROM_LEN])b, 3, &nb));
     TEST_ASSERT_EQUAL_INT(3, na);
     TEST_ASSERT_EQUAL_MEMORY(&ta, &tb, sizeof(ta));
-    TEST_ASSERT_EQUAL_UINT8(2, ta.slots[0].rom[1]);
-    TEST_ASSERT_EQUAL_UINT8(5, ta.slots[1].rom[1]);
-    TEST_ASSERT_EQUAL_UINT8(9, ta.slots[2].rom[1]);
+    TEST_ASSERT_EQUAL_UINT8(2, ta.channels[0].rom[1]);
+    TEST_ASSERT_EQUAL_UINT8(5, ta.channels[1].rom[1]);
+    TEST_ASSERT_EQUAL_UINT8(9, ta.channels[2].rom[1]);
 }
 
 void test_modbus_auto_assign_keeps_existing_and_fills_gaps(void)
 {
-    modbus_slot_table_t t;
+    modbus_channel_table_t t;
     memset(&t, 0, sizeof(t));
-    t.slots[0].assigned = true;
-    make_rom(t.slots[0].rom, 50);
-    t.slots[2].assigned = true;
-    make_rom(t.slots[2].rom, 60);
+    t.channels[0].assigned = true;
+    make_rom(t.channels[0].rom, 50);
+    t.channels[2].assigned = true;
+    make_rom(t.channels[2].rom, 60);
 
     uint8_t roms[4][MODBUS_ROM_LEN];
     make_rom(roms[0], 60); make_rom(roms[1], 7); make_rom(roms[2], 50); make_rom(roms[3], 7); /* dup */
     int n = 0;
-    TEST_ASSERT_EQUAL_INT(0, modbus_slots_auto_assign(&t, (const uint8_t (*)[MODBUS_ROM_LEN])roms, 4, &n));
+    TEST_ASSERT_EQUAL_INT(0, modbus_channels_auto_assign(&t, (const uint8_t (*)[MODBUS_ROM_LEN])roms, 4, &n));
     TEST_ASSERT_EQUAL_INT(1, n);
-    TEST_ASSERT_EQUAL_UINT8(50, t.slots[0].rom[1]);
-    TEST_ASSERT_EQUAL_UINT8(7, t.slots[1].rom[1]);
-    TEST_ASSERT_EQUAL_UINT8(60, t.slots[2].rom[1]);
-    TEST_ASSERT_EQUAL_INT(3, modbus_slots_assigned_count(&t));
+    TEST_ASSERT_EQUAL_UINT8(50, t.channels[0].rom[1]);
+    TEST_ASSERT_EQUAL_UINT8(7, t.channels[1].rom[1]);
+    TEST_ASSERT_EQUAL_UINT8(60, t.channels[2].rom[1]);
+    TEST_ASSERT_EQUAL_INT(3, modbus_channels_assigned_count(&t));
 }
 
 void test_modbus_auto_assign_full_table(void)
 {
-    modbus_slot_table_t t;
+    modbus_channel_table_t t;
     memset(&t, 0, sizeof(t));
-    for (int s = 0; s < MODBUS_SLOT_COUNT - 1; s++) {
-        t.slots[s].assigned = true;
-        make_rom(t.slots[s].rom, (uint8_t)s);
-        t.slots[s].rom[2] = 0xEE;
+    for (int s = 0; s < MODBUS_CHANNEL_COUNT - 1; s++) {
+        t.channels[s].assigned = true;
+        make_rom(t.channels[s].rom, (uint8_t)s);
+        t.channels[s].rom[2] = 0xEE;
     }
     uint8_t roms[3][MODBUS_ROM_LEN];
     make_rom(roms[0], 1); make_rom(roms[1], 2); make_rom(roms[2], 3);
     int n = 0;
-    TEST_ASSERT_EQUAL_INT(2, modbus_slots_auto_assign(&t, (const uint8_t (*)[MODBUS_ROM_LEN])roms, 3, &n));
+    TEST_ASSERT_EQUAL_INT(2, modbus_channels_auto_assign(&t, (const uint8_t (*)[MODBUS_ROM_LEN])roms, 3, &n));
     TEST_ASSERT_EQUAL_INT(1, n);
-    TEST_ASSERT_EQUAL_UINT8(1, t.slots[99].rom[1]);
+    TEST_ASSERT_EQUAL_UINT8(1, t.channels[99].rom[1]);
 }
 
 void test_modbus_move_swaps_and_release_clears(void)
 {
-    modbus_slot_table_t t;
+    modbus_channel_table_t t;
     memset(&t, 0, sizeof(t));
-    t.slots[0].assigned = true;
-    make_rom(t.slots[0].rom, 1);
-    t.slots[5].assigned = true;
-    make_rom(t.slots[5].rom, 2);
+    t.channels[0].assigned = true;
+    make_rom(t.channels[0].rom, 1);
+    t.channels[5].assigned = true;
+    make_rom(t.channels[5].rom, 2);
 
-    TEST_ASSERT_TRUE(modbus_slots_move(&t, 0, 5));
-    TEST_ASSERT_EQUAL_UINT8(2, t.slots[0].rom[1]);
-    TEST_ASSERT_EQUAL_UINT8(1, t.slots[5].rom[1]);
+    TEST_ASSERT_TRUE(modbus_channels_move(&t, 0, 5));
+    TEST_ASSERT_EQUAL_UINT8(2, t.channels[0].rom[1]);
+    TEST_ASSERT_EQUAL_UINT8(1, t.channels[5].rom[1]);
 
-    TEST_ASSERT_TRUE(modbus_slots_move(&t, 5, 42)); /* onto an empty slot */
-    TEST_ASSERT_FALSE(t.slots[5].assigned);
-    TEST_ASSERT_EQUAL_INT(42, modbus_slots_find(&t, (uint8_t[]){0x28, 1, 0, 0, 0, 0, 0, 1 ^ 0x5A}));
+    TEST_ASSERT_TRUE(modbus_channels_move(&t, 5, 42)); /* onto an empty channel */
+    TEST_ASSERT_FALSE(t.channels[5].assigned);
+    TEST_ASSERT_EQUAL_INT(42, modbus_channels_find(&t, (uint8_t[]){0x28, 1, 0, 0, 0, 0, 0, 1 ^ 0x5A}));
 
-    TEST_ASSERT_FALSE(modbus_slots_move(&t, 0, MODBUS_SLOT_COUNT));
-    TEST_ASSERT_FALSE(modbus_slots_move(&t, -1, 3));
+    TEST_ASSERT_FALSE(modbus_channels_move(&t, 0, MODBUS_CHANNEL_COUNT));
+    TEST_ASSERT_FALSE(modbus_channels_move(&t, -1, 3));
 
-    TEST_ASSERT_TRUE(modbus_slots_release(&t, 42));
-    TEST_ASSERT_FALSE(t.slots[42].assigned);
-    TEST_ASSERT_FALSE(modbus_slots_release(&t, 100));
+    TEST_ASSERT_TRUE(modbus_channels_release(&t, 42));
+    TEST_ASSERT_FALSE(t.channels[42].assigned);
+    TEST_ASSERT_FALSE(modbus_channels_release(&t, 100));
 }
 
-void test_modbus_slot_blob_round_trip(void)
+void test_modbus_channel_blob_round_trip(void)
 {
-    modbus_slot_table_t t, back;
+    modbus_channel_table_t t, back;
     memset(&t, 0, sizeof(t));
-    t.slots[0].assigned = true;
-    make_rom(t.slots[0].rom, 11);
-    t.slots[99].assigned = true;
-    make_rom(t.slots[99].rom, 12);
+    t.channels[0].assigned = true;
+    make_rom(t.channels[0].rom, 11);
+    t.channels[99].assigned = true;
+    make_rom(t.channels[99].rom, 12);
 
-    uint8_t blob[MODBUS_SLOT_BLOB_SIZE];
-    modbus_slots_serialize(&t, blob);
-    TEST_ASSERT_TRUE(modbus_slots_deserialize(&back, blob, sizeof(blob)));
+    uint8_t blob[MODBUS_CHANNEL_BLOB_SIZE];
+    modbus_channels_serialize(&t, blob);
+    TEST_ASSERT_TRUE(modbus_channels_deserialize(&back, blob, sizeof(blob)));
     TEST_ASSERT_EQUAL_MEMORY(&t, &back, sizeof(t));
 }
 
-void test_modbus_slot_blob_rejects_corruption(void)
+void test_modbus_channel_blob_rejects_corruption(void)
 {
-    modbus_slot_table_t t, back;
+    modbus_channel_table_t t, back;
     memset(&t, 0, sizeof(t));
-    t.slots[3].assigned = true;
-    make_rom(t.slots[3].rom, 1);
-    uint8_t blob[MODBUS_SLOT_BLOB_SIZE];
+    t.channels[3].assigned = true;
+    make_rom(t.channels[3].rom, 1);
+    uint8_t blob[MODBUS_CHANNEL_BLOB_SIZE];
 
-    modbus_slots_serialize(&t, blob);
+    modbus_channels_serialize(&t, blob);
     blob[10] ^= 0x01;
-    TEST_ASSERT_FALSE(modbus_slots_deserialize(&back, blob, sizeof(blob)));
-    TEST_ASSERT_EQUAL_INT(0, modbus_slots_assigned_count(&back));
+    TEST_ASSERT_FALSE(modbus_channels_deserialize(&back, blob, sizeof(blob)));
+    TEST_ASSERT_EQUAL_INT(0, modbus_channels_assigned_count(&back));
 
-    modbus_slots_serialize(&t, blob);
-    TEST_ASSERT_FALSE(modbus_slots_deserialize(&back, blob, sizeof(blob) - 1));
+    modbus_channels_serialize(&t, blob);
+    TEST_ASSERT_FALSE(modbus_channels_deserialize(&back, blob, sizeof(blob) - 1));
 
     /* Wrong version, CRC recomputed so only the version check can reject it */
-    modbus_slots_serialize(&t, blob);
+    modbus_channels_serialize(&t, blob);
     blob[0] = 99;
-    uint32_t crc = modbus_crc32(blob, MODBUS_SLOT_BLOB_SIZE - 4);
-    memcpy(&blob[MODBUS_SLOT_BLOB_SIZE - 4], (uint8_t[]){crc & 0xFF, (crc >> 8) & 0xFF, (crc >> 16) & 0xFF, crc >> 24}, 4);
-    TEST_ASSERT_FALSE(modbus_slots_deserialize(&back, blob, sizeof(blob)));
+    uint32_t crc = modbus_crc32(blob, MODBUS_CHANNEL_BLOB_SIZE - 4);
+    memcpy(&blob[MODBUS_CHANNEL_BLOB_SIZE - 4], (uint8_t[]){crc & 0xFF, (crc >> 8) & 0xFF, (crc >> 16) & 0xFF, crc >> 24}, 4);
+    TEST_ASSERT_FALSE(modbus_channels_deserialize(&back, blob, sizeof(blob)));
 }
 
-void test_modbus_slot_blob_rejects_duplicate_rom(void)
+void test_modbus_channel_blob_rejects_duplicate_rom(void)
 {
-    modbus_slot_table_t t, back;
+    modbus_channel_table_t t, back;
     memset(&t, 0, sizeof(t));
-    t.slots[0].assigned = true;
-    make_rom(t.slots[0].rom, 1);
-    t.slots[1] = t.slots[0];
-    uint8_t blob[MODBUS_SLOT_BLOB_SIZE];
-    modbus_slots_serialize(&t, blob);
-    TEST_ASSERT_FALSE(modbus_slots_deserialize(&back, blob, sizeof(blob)));
+    t.channels[0].assigned = true;
+    make_rom(t.channels[0].rom, 1);
+    t.channels[1] = t.channels[0];
+    uint8_t blob[MODBUS_CHANNEL_BLOB_SIZE];
+    modbus_channels_serialize(&t, blob);
+    TEST_ASSERT_FALSE(modbus_channels_deserialize(&back, blob, sizeof(blob)));
 }
 
 void test_modbus_crc32_known_value(void)
@@ -397,74 +397,74 @@ void test_modbus_unit_id_accepted(void)
 
 void test_modbus_move_sensor_checks(void)
 {
-    modbus_slot_table_t t;
+    modbus_channel_table_t t;
     memset(&t, 0, sizeof(t));
-    t.slots[2].assigned = true;
-    make_rom(t.slots[2].rom, 1);
-    t.slots[7].assigned = true;
-    make_rom(t.slots[7].rom, 2);
+    t.channels[2].assigned = true;
+    make_rom(t.channels[2].rom, 1);
+    t.channels[7].assigned = true;
+    make_rom(t.channels[7].rom, 2);
 
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_EMPTY, modbus_slots_move_sensor(&t, 3, 7));
-    TEST_ASSERT_EQUAL_UINT8(2, t.slots[7].rom[1]);
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_BAD_INDEX, modbus_slots_move_sensor(&t, 2, MODBUS_SLOT_COUNT));
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_BAD_INDEX, modbus_slots_move_sensor(&t, -1, 0));
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_EMPTY, modbus_channels_move_sensor(&t, 3, 7));
+    TEST_ASSERT_EQUAL_UINT8(2, t.channels[7].rom[1]);
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_BAD_INDEX, modbus_channels_move_sensor(&t, 2, MODBUS_CHANNEL_COUNT));
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_BAD_INDEX, modbus_channels_move_sensor(&t, -1, 0));
 
-    /* Onto an occupied slot swaps */
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_OK, modbus_slots_move_sensor(&t, 2, 7));
-    TEST_ASSERT_EQUAL_UINT8(1, t.slots[7].rom[1]);
-    TEST_ASSERT_EQUAL_UINT8(2, t.slots[2].rom[1]);
+    /* Onto an occupied channel swaps */
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_OK, modbus_channels_move_sensor(&t, 2, 7));
+    TEST_ASSERT_EQUAL_UINT8(1, t.channels[7].rom[1]);
+    TEST_ASSERT_EQUAL_UINT8(2, t.channels[2].rom[1]);
 
     /* Onto itself is a no-op */
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_OK, modbus_slots_move_sensor(&t, 7, 7));
-    TEST_ASSERT_EQUAL_UINT8(1, t.slots[7].rom[1]);
-    TEST_ASSERT_EQUAL_INT(2, modbus_slots_assigned_count(&t));
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_OK, modbus_channels_move_sensor(&t, 7, 7));
+    TEST_ASSERT_EQUAL_UINT8(1, t.channels[7].rom[1]);
+    TEST_ASSERT_EQUAL_INT(2, modbus_channels_assigned_count(&t));
 }
 
 void test_modbus_release_only_missing(void)
 {
-    modbus_slot_table_t t;
+    modbus_channel_table_t t;
     memset(&t, 0, sizeof(t));
-    t.slots[0].assigned = true;
-    make_rom(t.slots[0].rom, 1);
-    t.slots[1].assigned = true;
-    make_rom(t.slots[1].rom, 2);
+    t.channels[0].assigned = true;
+    make_rom(t.channels[0].rom, 1);
+    t.channels[1].assigned = true;
+    make_rom(t.channels[1].rom, 2);
     uint8_t present[1][MODBUS_ROM_LEN];
     make_rom(present[0], 1);
     const uint8_t (*p)[MODBUS_ROM_LEN] = (const uint8_t (*)[MODBUS_ROM_LEN])present;
 
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_PRESENT, modbus_slots_release_missing(&t, 0, p, 1));
-    TEST_ASSERT_TRUE(t.slots[0].assigned);
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_EMPTY, modbus_slots_release_missing(&t, 5, p, 1));
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_BAD_INDEX, modbus_slots_release_missing(&t, 100, p, 1));
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_OK, modbus_slots_release_missing(&t, 1, p, 1));
-    TEST_ASSERT_FALSE(t.slots[1].assigned);
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_PRESENT, modbus_channels_release_missing(&t, 0, p, 1));
+    TEST_ASSERT_TRUE(t.channels[0].assigned);
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_EMPTY, modbus_channels_release_missing(&t, 5, p, 1));
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_BAD_INDEX, modbus_channels_release_missing(&t, 100, p, 1));
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_OK, modbus_channels_release_missing(&t, 1, p, 1));
+    TEST_ASSERT_FALSE(t.channels[1].assigned);
 
-    /* A released slot is free for the next new sensor, and the released
+    /* A released channel is free for the next new sensor, and the released
      * sensor doesn't come back while it's missing */
     uint8_t roms[2][MODBUS_ROM_LEN];
     make_rom(roms[0], 1);
     make_rom(roms[1], 3);
     int n = 0;
-    modbus_slots_auto_assign(&t, (const uint8_t (*)[MODBUS_ROM_LEN])roms, 2, &n);
+    modbus_channels_auto_assign(&t, (const uint8_t (*)[MODBUS_ROM_LEN])roms, 2, &n);
     TEST_ASSERT_EQUAL_INT(1, n);
-    TEST_ASSERT_EQUAL_UINT8(3, t.slots[1].rom[1]);
+    TEST_ASSERT_EQUAL_UINT8(3, t.channels[1].rom[1]);
 }
 
 void test_modbus_place_for_restore(void)
 {
-    modbus_slot_table_t t;
+    modbus_channel_table_t t;
     memset(&t, 0, sizeof(t));
     uint8_t a[MODBUS_ROM_LEN], b[MODBUS_ROM_LEN];
     make_rom(a, 1);
     make_rom(b, 2);
 
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_OK, modbus_slots_place(&t, 99, a));
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_OCCUPIED, modbus_slots_place(&t, 99, b));
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_DUPLICATE, modbus_slots_place(&t, 3, a));
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_BAD_INDEX, modbus_slots_place(&t, 100, b));
-    TEST_ASSERT_EQUAL_INT(MB_SLOT_OP_BAD_INDEX, modbus_slots_place(&t, -1, b));
-    TEST_ASSERT_EQUAL_INT(1, modbus_slots_assigned_count(&t));
-    TEST_ASSERT_EQUAL_INT(99, modbus_slots_find(&t, a));
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_OK, modbus_channels_place(&t, 99, a));
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_OCCUPIED, modbus_channels_place(&t, 99, b));
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_DUPLICATE, modbus_channels_place(&t, 3, a));
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_BAD_INDEX, modbus_channels_place(&t, 100, b));
+    TEST_ASSERT_EQUAL_INT(MB_CHANNEL_OP_BAD_INDEX, modbus_channels_place(&t, -1, b));
+    TEST_ASSERT_EQUAL_INT(1, modbus_channels_assigned_count(&t));
+    TEST_ASSERT_EQUAL_INT(99, modbus_channels_find(&t, a));
 }
 
 void test_modbus_rom_hex_round_trip(void)
@@ -503,14 +503,14 @@ void run_modbus_map_tests(void)
     RUN_TEST(test_modbus_status_never_read_is_stale);
     RUN_TEST(test_modbus_status_stale_after_limit);
     RUN_TEST(test_modbus_build_regs_info_block);
-    RUN_TEST(test_modbus_build_regs_slots);
+    RUN_TEST(test_modbus_build_regs_channels);
     RUN_TEST(test_modbus_build_regs_bus_failure_invalidates_all);
     RUN_TEST(test_modbus_auto_assign_is_order_independent);
     RUN_TEST(test_modbus_auto_assign_keeps_existing_and_fills_gaps);
     RUN_TEST(test_modbus_auto_assign_full_table);
     RUN_TEST(test_modbus_move_swaps_and_release_clears);
-    RUN_TEST(test_modbus_slot_blob_round_trip);
-    RUN_TEST(test_modbus_slot_blob_rejects_corruption);
-    RUN_TEST(test_modbus_slot_blob_rejects_duplicate_rom);
+    RUN_TEST(test_modbus_channel_blob_round_trip);
+    RUN_TEST(test_modbus_channel_blob_rejects_corruption);
+    RUN_TEST(test_modbus_channel_blob_rejects_duplicate_rom);
     RUN_TEST(test_modbus_crc32_known_value);
 }

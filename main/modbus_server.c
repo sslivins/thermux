@@ -1,12 +1,12 @@
 /**
  * @file modbus_server.c
- * @brief Read-only Modbus TCP server (esp-modbus glue, settings, slot table)
+ * @brief Read-only Modbus TCP server (esp-modbus glue, settings, channel table)
  *
  * Locking:
- *  - s_update_lock serializes register-image rebuilds and slot-table saves,
+ *  - s_update_lock serializes register-image rebuilds and channel-table saves,
  *    so a slower rebuild can never overwrite a newer table or image.
  *  - s_life_lock serializes start/stop/restart and register-image updates.
- *  - s_state_lock guards the slot table, settings and status fields; only
+ *  - s_state_lock guards the channel table, settings and status fields; only
  *    held for short copies (never across NVS, network or esp-modbus calls).
  *  - mbc_slave_lock() is held only while copying the finished image into
  *    the registers esp-modbus serves.
@@ -39,7 +39,7 @@ static const char *TAG = "modbus";
 #define NVS_KEY_ENABLED     "mb_enabled"
 #define NVS_KEY_PORT        "mb_port"
 #define NVS_KEY_UID         "mb_uid"
-#define NVS_KEY_SLOTS       "mb_slots"
+#define NVS_KEY_CHANNELS       "mb_channels"
 
 #define MDNS_SERVICE        "_mbap"
 #define MDNS_PROTO          "_tcp"
@@ -76,12 +76,12 @@ static modbus_config_t s_cfg = {
     .port = MODBUS_DEFAULT_PORT,
     .unit_id = MODBUS_DEFAULT_UNIT_ID,
 };
-static modbus_slot_table_t s_slots;
+static modbus_channel_table_t s_channels;
 static bool s_running;
 static char s_last_error[64];
 static uint32_t s_requests;
 static int64_t s_last_request_ms;
-static int s_without_slot;
+static int s_without_channel;
 static uint8_t s_mac[6];
 static uint16_t s_fw_version[3];
 static int64_t s_next_watchdog_ms;
@@ -129,36 +129,36 @@ static esp_err_t save_config(const modbus_config_t *cfg)
     return err;
 }
 
-static void load_slots(modbus_slot_table_t *table)
+static void load_channels(modbus_channel_table_t *table)
 {
     memset(table, 0, sizeof(*table));
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
         return;
     }
-    uint8_t *blob = malloc(MODBUS_SLOT_BLOB_SIZE);
-    size_t len = MODBUS_SLOT_BLOB_SIZE;
-    if (blob && nvs_get_blob(h, NVS_KEY_SLOTS, blob, &len) == ESP_OK) {
-        if (!modbus_slots_deserialize(table, blob, len)) {
-            ESP_LOGW(TAG, "Stored slot table is invalid; starting with an empty table");
+    uint8_t *blob = malloc(MODBUS_CHANNEL_BLOB_SIZE);
+    size_t len = MODBUS_CHANNEL_BLOB_SIZE;
+    if (blob && nvs_get_blob(h, NVS_KEY_CHANNELS, blob, &len) == ESP_OK) {
+        if (!modbus_channels_deserialize(table, blob, len)) {
+            ESP_LOGW(TAG, "Stored channel table is invalid; starting with an empty table");
         }
     }
     free(blob);
     nvs_close(h);
 }
 
-static esp_err_t save_slots(const modbus_slot_table_t *table)
+static esp_err_t save_channels(const modbus_channel_table_t *table)
 {
-    uint8_t *blob = malloc(MODBUS_SLOT_BLOB_SIZE);
+    uint8_t *blob = malloc(MODBUS_CHANNEL_BLOB_SIZE);
     if (blob == NULL) {
         return ESP_ERR_NO_MEM;
     }
-    modbus_slots_serialize(table, blob);
+    modbus_channels_serialize(table, blob);
 
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
     if (err == ESP_OK) {
-        err = nvs_set_blob(h, NVS_KEY_SLOTS, blob, MODBUS_SLOT_BLOB_SIZE);
+        err = nvs_set_blob(h, NVS_KEY_CHANNELS, blob, MODBUS_CHANNEL_BLOB_SIZE);
         if (err == ESP_OK) {
             err = nvs_commit(h);
         }
@@ -166,7 +166,7 @@ static esp_err_t save_slots(const modbus_slot_table_t *table)
     }
     free(blob);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to save slot table: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to save channel table: %s", esp_err_to_name(err));
     }
     return err;
 }
@@ -405,8 +405,8 @@ static void set_last_error(esp_err_t err, const modbus_config_t *cfg)
 
 /* ---- Register image ------------------------------------------------------ */
 
-/* Rebuild the register image. Saves the slot table when @p force_save is set
- * or new sensors were given slots. Returns the save result. */
+/* Rebuild the register image. Saves the channel table when @p force_save is set
+ * or new sensors were given channels. Returns the save result. */
 static esp_err_t update_image(bool force_save)
 {
     if (s_life_lock == NULL) {
@@ -445,7 +445,7 @@ static esp_err_t update_image(bool force_save)
     }
     free(snap);
 
-    modbus_slot_table_t *table = malloc(sizeof(*table));
+    modbus_channel_table_t *table = malloc(sizeof(*table));
     modbus_regs_t *image = malloc(sizeof(*image));
     if (table == NULL || image == NULL) {
         ESP_LOGE(TAG, "Out of memory building the register image");
@@ -455,21 +455,21 @@ static esp_err_t update_image(bool force_save)
 
     int newly = 0;
     state_lock();
-    int left_over = modbus_slots_auto_assign(&s_slots, (const uint8_t (*)[MODBUS_ROM_LEN])roms,
+    int left_over = modbus_channels_auto_assign(&s_channels, (const uint8_t (*)[MODBUS_ROM_LEN])roms,
                                              count, &newly);
-    bool full_changed = left_over != s_without_slot;
-    s_without_slot = left_over;
-    *table = s_slots;
+    bool full_changed = left_over != s_without_channel;
+    s_without_channel = left_over;
+    *table = s_channels;
     state_unlock();
 
     if (newly > 0) {
-        ESP_LOGI(TAG, "Assigned Modbus slots to %d new sensor(s)", newly);
+        ESP_LOGI(TAG, "Assigned Modbus channels to %d new sensor(s)", newly);
     }
     if (newly > 0 || force_save) {
-        save_err = save_slots(table);
+        save_err = save_channels(table);
     }
     if (full_changed && left_over > 0) {
-        ESP_LOGW(TAG, "Modbus slot table is full: %d sensor(s) have no slot", left_over);
+        ESP_LOGW(TAG, "Modbus channel table is full: %d sensor(s) have no channel", left_over);
     }
 
     modbus_info_input_t info = {
@@ -549,21 +549,21 @@ void modbus_server_update(void)
     }
 }
 
-/* ---- Slot management ------------------------------------------------------- */
+/* ---- Channel management ------------------------------------------------------- */
 
-void modbus_server_get_slots(modbus_slot_table_t *out)
+void modbus_server_get_channels(modbus_channel_table_t *out)
 {
     if (s_state_lock == NULL) {
         memset(out, 0, sizeof(*out));
         return;
     }
     state_lock();
-    *out = s_slots;
+    *out = s_channels;
     state_unlock();
 }
 
-void modbus_server_get_slot_regs(uint16_t status[MODBUS_SLOT_COUNT],
-                                 uint16_t temp[MODBUS_SLOT_COUNT],
+void modbus_server_get_channel_regs(uint16_t status[MODBUS_CHANNEL_COUNT],
+                                 uint16_t temp[MODBUS_CHANNEL_COUNT],
                                  uint16_t rom[MB_REG_ROM_COUNT])
 {
     /* s_regs is only written under s_life_lock */
@@ -577,25 +577,25 @@ void modbus_server_get_slot_regs(uint16_t status[MODBUS_SLOT_COUNT],
     }
 }
 
-esp_err_t modbus_server_move_slot(int from, int to, modbus_slot_op_t *op)
+esp_err_t modbus_server_move_channel(int from, int to, modbus_channel_op_t *op)
 {
     if (s_state_lock == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
     state_lock();
-    modbus_slot_op_t res = modbus_slots_move_sensor(&s_slots, from, to);
+    modbus_channel_op_t res = modbus_channels_move_sensor(&s_channels, from, to);
     state_unlock();
     if (op) {
         *op = res;
     }
-    if (res != MB_SLOT_OP_OK) {
+    if (res != MB_CHANNEL_OP_OK) {
         return ESP_ERR_INVALID_ARG;
     }
-    ESP_LOGI(TAG, "Moved Modbus slot %d to %d", from, to);
+    ESP_LOGI(TAG, "Moved Modbus channel %d to %d", from, to);
     return update_image(true);
 }
 
-esp_err_t modbus_server_release_slot(int slot, modbus_slot_op_t *op)
+esp_err_t modbus_server_release_channel(int channel, modbus_channel_op_t *op)
 {
     if (s_state_lock == NULL) {
         return ESP_ERR_INVALID_STATE;
@@ -618,21 +618,21 @@ esp_err_t modbus_server_release_slot(int slot, modbus_slot_op_t *op)
     free(snap);
 
     state_lock();
-    modbus_slot_op_t res = modbus_slots_release_missing(
-        &s_slots, slot, (const uint8_t (*)[MODBUS_ROM_LEN])present, count);
+    modbus_channel_op_t res = modbus_channels_release_missing(
+        &s_channels, channel, (const uint8_t (*)[MODBUS_ROM_LEN])present, count);
     state_unlock();
     free(present);
     if (op) {
         *op = res;
     }
-    if (res != MB_SLOT_OP_OK) {
+    if (res != MB_CHANNEL_OP_OK) {
         return ESP_ERR_INVALID_ARG;
     }
-    ESP_LOGI(TAG, "Released Modbus slot %d", slot);
+    ESP_LOGI(TAG, "Released Modbus channel %d", channel);
     return update_image(true);
 }
 
-esp_err_t modbus_server_restore(const modbus_config_t *cfg, const modbus_slot_table_t *slots)
+esp_err_t modbus_server_restore(const modbus_config_t *cfg, const modbus_channel_table_t *channels)
 {
     if (s_state_lock == NULL) {
         return ESP_ERR_INVALID_STATE;
@@ -647,9 +647,9 @@ esp_err_t modbus_server_restore(const modbus_config_t *cfg, const modbus_slot_ta
             return err;
         }
     }
-    if (slots != NULL) {
+    if (channels != NULL) {
         state_lock();
-        s_slots = *slots;
+        s_channels = *channels;
         state_unlock();
         err = update_image(true);
     }
@@ -674,15 +674,15 @@ esp_err_t modbus_server_init(void)
 
     modbus_config_t cfg = s_cfg;
     load_config(&cfg);
-    modbus_slot_table_t *table = malloc(sizeof(*table));
+    modbus_channel_table_t *table = malloc(sizeof(*table));
     if (table == NULL) {
         return ESP_ERR_NO_MEM;
     }
-    load_slots(table);
+    load_channels(table);
 
     state_lock();
     s_cfg = cfg;
-    s_slots = *table;
+    s_channels = *table;
     state_unlock();
     free(table);
 
@@ -766,18 +766,18 @@ void modbus_server_get_status(modbus_status_t *out)
     strncpy(out->last_error, s_last_error, sizeof(out->last_error) - 1);
     out->requests = s_requests;
     out->last_request_ms = s_last_request_ms;
-    out->slots_assigned = modbus_slots_assigned_count(&s_slots);
-    out->sensors_without_slot = s_without_slot;
+    out->channels_assigned = modbus_channels_assigned_count(&s_channels);
+    out->sensors_without_channel = s_without_channel;
     state_unlock();
 }
 
-int modbus_server_get_slot(const uint8_t *rom)
+int modbus_server_get_channel(const uint8_t *rom)
 {
     if (s_state_lock == NULL) {
         return -1;
     }
     state_lock();
-    int slot = modbus_slots_find(&s_slots, rom);
+    int channel = modbus_channels_find(&s_channels, rom);
     state_unlock();
-    return slot;
+    return channel;
 }
