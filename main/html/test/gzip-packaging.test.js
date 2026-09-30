@@ -40,7 +40,7 @@ test('gzip_html.py output decompresses to byte-identical source for each served 
         const result = spawnSync(python, [GZIP_SCRIPT, HTML_DIR, outDir], { encoding: 'utf8' });
         assert.equal(result.status, 0, `gzip_html.py failed: ${result.stderr}`);
 
-        for (const filename of ['index.html', 'config.html']) {
+        for (const filename of ['index.html', 'config.html', 'login.html']) {
             const sourcePath = path.join(HTML_DIR, filename);
             const gzPath = path.join(outDir, `${filename}.gz`);
 

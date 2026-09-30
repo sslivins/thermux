@@ -58,6 +58,9 @@ function defaultState() {
         sensor: { read_interval: 10000, publish_interval: 30000, resolution: 12, min_safe_read_interval_ms: 5000 },
         auth: { enabled: false, username: '', api_key: '' },
         authStatus: { auth_enabled: false, logged_in: true },
+        /* Credentials accepted by POST /api/auth/login (login.html). Set
+           unreachable to drop the connection instead of answering. */
+        login: { username: 'admin', password: 'correct-horse', unreachable: false },
         logLevel: { level: 3, level_name: 'info' },
         otaChannel: { include_prerelease: false },
         modbus: {
@@ -139,6 +142,23 @@ function createMockServer() {
         }
         if (req.method === 'GET' && url.pathname === '/config') {
             return sendFile(res, path.join(HTML_DIR, 'config.html'));
+        }
+        if (req.method === 'GET' && url.pathname === '/login') {
+            return sendFile(res, path.join(HTML_DIR, 'login.html'));
+        }
+        if (req.method === 'POST' && url.pathname === '/api/auth/login') {
+            if (state.login.unreachable) {
+                req.socket.destroy();
+                return;
+            }
+            let parsed = {};
+            try {
+                parsed = JSON.parse(body);
+            } catch {
+                // fall through to a failed login
+            }
+            const ok = parsed.username === state.login.username && parsed.password === state.login.password;
+            return sendJson(res, 200, { success: ok });
         }
 
         if (req.method === 'GET' && url.pathname === '/api/status') {
