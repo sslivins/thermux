@@ -1,18 +1,18 @@
 /**
  * @file modbus_map.h
- * @brief Modbus TCP register map, slot status and slot table (host-testable)
+ * @brief Modbus TCP register map, channel status and channel table (host-testable)
  *
  * Pure logic with no ESP-IDF dependencies, compiled into both the firmware
  * and the host unit tests. The esp-modbus glue lives in modbus_server.c.
  *
  * Register map v1 (input registers, FC 0x04, zero-based):
  *   0..15       device info (see MB_INFO_*)
- *   100..199    temperature per slot, int16 in 0.01 degC, 0x8000 unless OK
- *   200..299    status per slot (modbus_slot_status_t)
+ *   100..199    temperature per channel, int16 in 0.01 degC, 0x8000 unless OK
+ *   200..299    status per channel (modbus_channel_status_t)
  *   300..399    seconds since last successful read (65535 = never, or not connected)
- *   1000..1399  ROM ID, 4 registers per slot, big-endian byte pairs
+ *   1000..1399  ROM ID, 4 registers per channel, big-endian byte pairs
  *
- * All MODBUS_SLOT_COUNT slots are always mapped, whatever CONFIG_MAX_SENSORS
+ * All MODBUS_CHANNEL_COUNT channels are always mapped, whatever CONFIG_MAX_SENSORS
  * is, so the address map never changes between builds.
  */
 
@@ -24,7 +24,7 @@
 #include <stdint.h>
 
 #define MODBUS_MAP_VERSION      1
-#define MODBUS_SLOT_COUNT       100
+#define MODBUS_CHANNEL_COUNT       100
 #define MODBUS_ROM_LEN          8
 
 #define MB_REG_INFO_START       0
@@ -34,20 +34,20 @@
 #define MB_REG_AGE_START        300
 #define MB_REG_ROM_START        1000
 #define MB_REGS_PER_ROM         (MODBUS_ROM_LEN / 2)
-#define MB_REG_ROM_COUNT        (MODBUS_SLOT_COUNT * MB_REGS_PER_ROM)
+#define MB_REG_ROM_COUNT        (MODBUS_CHANNEL_COUNT * MB_REGS_PER_ROM)
 
 /* Offsets inside the info block */
 #define MB_INFO_MAP_VERSION     0
 #define MB_INFO_FW_MAJOR        1
 #define MB_INFO_FW_MINOR        2
 #define MB_INFO_FW_PATCH        3
-#define MB_INFO_SLOT_CAPACITY   4
+#define MB_INFO_CHANNEL_CAPACITY   4
 #define MB_INFO_CYCLE_COUNT     5
 #define MB_INFO_UPTIME_HI       6
 #define MB_INFO_UPTIME_LO       7
 #define MB_INFO_MAC_0           8   /* 8..10 */
 #define MB_INFO_MAX_SENSORS     11
-#define MB_INFO_SLOTS_ASSIGNED  12
+#define MB_INFO_CHANNELS_ASSIGNED  12
 #define MB_INFO_SENSORS_PRESENT 13
 #define MB_INFO_LAST_RESULT     14
 #define MB_INFO_READ_INTERVAL_S 15
@@ -71,16 +71,16 @@ typedef enum {
     MB_STATUS_MISSING = 2,
     MB_STATUS_READ_ERROR = 3,
     MB_STATUS_STALE = 4,
-} modbus_slot_status_t;
+} modbus_channel_status_t;
 
 typedef struct {
     bool assigned;
     uint8_t rom[MODBUS_ROM_LEN];
-} modbus_slot_t;
+} modbus_channel_t;
 
 typedef struct {
-    modbus_slot_t slots[MODBUS_SLOT_COUNT];
-} modbus_slot_table_t;
+    modbus_channel_t channels[MODBUS_CHANNEL_COUNT];
+} modbus_channel_table_t;
 
 /** One sensor currently present on the bus */
 typedef struct {
@@ -105,9 +105,9 @@ typedef struct {
 /** Full register image; each array is one esp-modbus area descriptor */
 typedef struct {
     uint16_t info[MB_REG_INFO_COUNT];
-    uint16_t temp[MODBUS_SLOT_COUNT];
-    uint16_t status[MODBUS_SLOT_COUNT];
-    uint16_t age[MODBUS_SLOT_COUNT];
+    uint16_t temp[MODBUS_CHANNEL_COUNT];
+    uint16_t status[MODBUS_CHANNEL_COUNT];
+    uint16_t age[MODBUS_CHANNEL_COUNT];
     uint16_t rom[MB_REG_ROM_COUNT];
 } modbus_regs_t;
 
@@ -123,11 +123,11 @@ uint16_t modbus_age_to_reg(int64_t last_read_ms, int64_t now_ms);
 int64_t modbus_stale_limit_ms(uint32_t read_interval_ms);
 
 /**
- * @brief Status of one slot, checked in order:
+ * @brief Status of one channel, checked in order:
  *        UNASSIGNED, MISSING, READ_ERROR, STALE, OK.
- * @param sensor The present sensor with this slot's ROM, or NULL if absent
+ * @param sensor The present sensor with this channel's ROM, or NULL if absent
  */
-modbus_slot_status_t modbus_slot_status(const modbus_slot_t *slot,
+modbus_channel_status_t modbus_channel_status(const modbus_channel_t *channel,
                                         const modbus_sensor_input_t *sensor,
                                         uint16_t last_result,
                                         int64_t now_ms,
@@ -138,7 +138,7 @@ void modbus_parse_version(const char *version, uint16_t out[3]);
 
 /** Build the full register image */
 void modbus_build_regs(modbus_regs_t *out,
-                       const modbus_slot_table_t *table,
+                       const modbus_channel_table_t *table,
                        const modbus_sensor_input_t *sensors, int sensor_count,
                        const modbus_info_input_t *info);
 
@@ -153,65 +153,65 @@ bool modbus_config_valid(uint32_t port, uint32_t unit_id, uint32_t reserved_port
  *  socket layer, so 255 never reaches the handler in practice. */
 bool modbus_unit_id_accepted(uint8_t request_uid, uint8_t configured_uid);
 
-/* ---- Slot table ---------------------------------------------------------- */
+/* ---- Channel table ---------------------------------------------------------- */
 
-/** Slot index holding @p rom, or -1 */
-int modbus_slots_find(const modbus_slot_table_t *table, const uint8_t *rom);
+/** Channel index holding @p rom, or -1 */
+int modbus_channels_find(const modbus_channel_table_t *table, const uint8_t *rom);
 
-/** Number of assigned slots */
-int modbus_slots_assigned_count(const modbus_slot_table_t *table);
+/** Number of assigned channels */
+int modbus_channels_assigned_count(const modbus_channel_table_t *table);
 
 /**
- * @brief Give every present-but-unassigned ROM a slot
+ * @brief Give every present-but-unassigned ROM a channel
  *
- * The unassigned ROMs are sorted, then given the lowest free slots, so the
+ * The unassigned ROMs are sorted, then given the lowest free channels, so the
  * result doesn't depend on the order sensors were found on the bus.
  *
- * @param[out] assigned   Number of slots newly assigned (may be NULL)
- * @return Number of ROMs left without a slot because the table is full
+ * @param[out] assigned   Number of channels newly assigned (may be NULL)
+ * @return Number of ROMs left without a channel because the table is full
  */
-int modbus_slots_auto_assign(modbus_slot_table_t *table,
+int modbus_channels_auto_assign(modbus_channel_table_t *table,
                              const uint8_t (*roms)[MODBUS_ROM_LEN], int rom_count,
                              int *assigned);
 
-/** Move slot @p from to @p to, swapping with whatever is in @p to. False on bad index. */
-bool modbus_slots_move(modbus_slot_table_t *table, int from, int to);
+/** Move channel @p from to @p to, swapping with whatever is in @p to. False on bad index. */
+bool modbus_channels_move(modbus_channel_table_t *table, int from, int to);
 
-/** Clear a slot. False on bad index. */
-bool modbus_slots_release(modbus_slot_table_t *table, int slot);
+/** Clear a channel. False on bad index. */
+bool modbus_channels_release(modbus_channel_table_t *table, int channel);
 
-/** Result of a checked slot operation (move, release, place) */
+/** Result of a checked channel operation (move, release, place) */
 typedef enum {
-    MB_SLOT_OP_OK = 0,
-    MB_SLOT_OP_BAD_INDEX,   /**< Slot number outside 0..MODBUS_SLOT_COUNT-1 */
-    MB_SLOT_OP_EMPTY,       /**< No sensor assigned to the source slot */
-    MB_SLOT_OP_PRESENT,     /**< Sensor is still on the bus, so it can't be released */
-    MB_SLOT_OP_OCCUPIED,    /**< Target slot already holds a sensor */
-    MB_SLOT_OP_DUPLICATE,   /**< ROM already assigned to another slot */
-} modbus_slot_op_t;
+    MB_CHANNEL_OP_OK = 0,
+    MB_CHANNEL_OP_BAD_INDEX,   /**< Channel number outside 0..MODBUS_CHANNEL_COUNT-1 */
+    MB_CHANNEL_OP_EMPTY,       /**< No sensor assigned to the source channel */
+    MB_CHANNEL_OP_PRESENT,     /**< Sensor is still on the bus, so it can't be released */
+    MB_CHANNEL_OP_OCCUPIED,    /**< Target channel already holds a sensor */
+    MB_CHANNEL_OP_DUPLICATE,   /**< ROM already assigned to another channel */
+} modbus_channel_op_t;
 
 /**
  * @brief Move the sensor in @p from to @p to
  *
- * If @p to holds a sensor, the two swap places. Moving a slot onto itself is
+ * If @p to holds a sensor, the two swap places. Moving a channel onto itself is
  * a no-op that succeeds.
  */
-modbus_slot_op_t modbus_slots_move_sensor(modbus_slot_table_t *table, int from, int to);
+modbus_channel_op_t modbus_channels_move_sensor(modbus_channel_table_t *table, int from, int to);
 
 /**
- * @brief Release a slot whose sensor is no longer on the bus
+ * @brief Release a channel whose sensor is no longer on the bus
  *
  * A present sensor can't be released: the next read cycle would just give
- * it a slot again.
+ * it a channel again.
  *
  * @param present_roms ROMs found in the latest scan
  */
-modbus_slot_op_t modbus_slots_release_missing(modbus_slot_table_t *table, int slot,
+modbus_channel_op_t modbus_channels_release_missing(modbus_channel_table_t *table, int channel,
                                               const uint8_t (*present_roms)[MODBUS_ROM_LEN],
                                               int present_count);
 
-/** Put @p rom into empty slot @p slot (used when restoring a backup) */
-modbus_slot_op_t modbus_slots_place(modbus_slot_table_t *table, int slot, const uint8_t *rom);
+/** Put @p rom into empty channel @p channel (used when restoring a backup) */
+modbus_channel_op_t modbus_channels_place(modbus_channel_table_t *table, int channel, const uint8_t *rom);
 
 /* ---- ROM ID text form ------------------------------------------------------ */
 
@@ -222,18 +222,18 @@ void modbus_rom_to_hex(const uint8_t *rom, char *out);
 /** Parse 16 hex characters (either case). False on wrong length or bad characters. */
 bool modbus_rom_from_hex(const char *str, uint8_t *rom);
 
-/* ---- Slot table persistence ---------------------------------------------- */
+/* ---- Channel table persistence ---------------------------------------------- */
 
-#define MODBUS_SLOT_BLOB_VERSION 1
+#define MODBUS_CHANNEL_BLOB_VERSION 1
 /* u16 version + 100 x (u8 assigned + 8 rom) + u32 crc32 */
-#define MODBUS_SLOT_BLOB_SIZE   (2 + MODBUS_SLOT_COUNT * (1 + MODBUS_ROM_LEN) + 4)
+#define MODBUS_CHANNEL_BLOB_SIZE   (2 + MODBUS_CHANNEL_COUNT * (1 + MODBUS_ROM_LEN) + 4)
 
 uint32_t modbus_crc32(const uint8_t *data, size_t len);
 
-/** Serialize into @p buf (MODBUS_SLOT_BLOB_SIZE bytes) */
-void modbus_slots_serialize(const modbus_slot_table_t *table, uint8_t *buf);
+/** Serialize into @p buf (MODBUS_CHANNEL_BLOB_SIZE bytes) */
+void modbus_channels_serialize(const modbus_channel_table_t *table, uint8_t *buf);
 
 /** Parse a blob; false (and @p table cleared) on wrong size, version or CRC */
-bool modbus_slots_deserialize(modbus_slot_table_t *table, const uint8_t *buf, size_t len);
+bool modbus_channels_deserialize(modbus_channel_table_t *table, const uint8_t *buf, size_t len);
 
 #endif /* MODBUS_MAP_H */

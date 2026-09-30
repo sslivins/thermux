@@ -151,22 +151,22 @@
         .toast.show { opacity: 1; }
         .toast.error { background: #ef4444; }
         .current-value { font-size: 0.85em; color: #888; margin-bottom: 8px; }
-        .mb-slots { margin-top: 20px; }
-        #modbus-slots { overflow-x: auto; }
-        .mb-slots h3 { font-size: 1em; color: #ccc; margin-bottom: 5px; }
-        .mb-slot-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9em; }
-        .mb-slot-table th, .mb-slot-table td {
+        .mb-channels { margin-top: 20px; }
+        #modbus-channels { overflow-x: auto; }
+        .mb-channels h3 { font-size: 1em; color: #ccc; margin-bottom: 5px; }
+        .mb-channel-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9em; }
+        .mb-channel-table th, .mb-channel-table td {
             padding: 6px 8px;
             border-bottom: 1px solid rgba(255,255,255,0.1);
             text-align: left;
             vertical-align: middle;
         }
-        .mb-slot-table th { color: #888; font-weight: normal; }
-        .mb-slot-addr { display: block; font-family: monospace; font-size: 0.85em; color: #888; }
-        .mb-slot-status-ok { color: #22c55e; }
-        .mb-slot-status-bad { color: #f59e0b; }
-        .mb-slot-actions { white-space: nowrap; }
-        .mb-slot-actions input {
+        .mb-channel-table th { color: #888; font-weight: normal; }
+        .mb-channel-addr { display: block; font-family: monospace; font-size: 0.85em; color: #888; }
+        .mb-channel-status-ok { color: #22c55e; }
+        .mb-channel-status-bad { color: #f59e0b; }
+        .mb-channel-actions { white-space: nowrap; }
+        .mb-channel-actions input {
             width: 4.5em;
             padding: 6px;
             border: 1px solid rgba(255,255,255,0.2);
@@ -174,7 +174,7 @@
             background: rgba(255,255,255,0.1);
             color: #fff;
         }
-        .mb-slot-actions .btn { padding: 6px 10px; margin: 0 0 0 4px; font-size: 0.85em; }
+        .mb-channel-actions .btn { padding: 6px 10px; margin: 0 0 0 4px; font-size: 0.85em; }
         .danger-zone { border-color: #ef4444; }
         .danger-zone .section-title { color: #ef4444; }
         .version-row {
@@ -400,14 +400,14 @@
                 <div class="current-value" id="modbus-info">Loading...</div>
                 <button type="submit" class="btn btn-primary">💾 Save Modbus Settings</button>
             </form>
-            <div class="mb-slots">
-                <h3>Sensor slots</h3>
+            <div class="mb-channels">
+                <h3>Sensor channels</h3>
                 <div class="form-hint">
-                    Each sensor keeps its slot, so register addresses don't change when sensors are added or the bus is rescanned.
-                    Slot N's temperature is in input register 100+N, in hundredths of a degree.
-                    Moving a sensor onto a used slot swaps the two. A slot can only be released once its sensor is disconnected.
+                    Each sensor keeps its channel, so register addresses don't change when sensors are added or the bus is rescanned.
+                    Channel N's temperature is in input register 100+N, in hundredths of a degree.
+                    Moving a sensor onto a used channel swaps the two. A channel can only be released once its sensor is disconnected.
                 </div>
-                <div id="modbus-slots">Loading...</div>
+                <div id="modbus-channels">Loading...</div>
             </div>
         </div>
 
@@ -515,7 +515,7 @@
         <div class="config-section" id="panel-backup">
             <div class="section-title">💾 Backup / Restore</div>
             <p style="margin-bottom: 15px; color: #ccc;">
-                Save your sensor names, Modbus slot assignments and settings so you don't have to re-enter them after a re-flash
+                Save your sensor names, Modbus channel assignments and settings so you don't have to re-enter them after a re-flash
                 or new device. Backup files are plain JSON, not encrypted &mdash; only include MQTT/WiFi/login
                 credentials below if you'll store the downloaded file somewhere secure.
             </p>
@@ -1158,9 +1158,9 @@
 
             const lines = [];
             if (mb.error) lines.push(mb.error);
-            lines.push(`Slots in use: ${mb.slots_assigned} of ${mb.slot_capacity}`);
-            if (mb.sensors_without_slot > 0) {
-                lines.push(`${mb.sensors_without_slot} sensor(s) have no slot because all slots are in use`);
+            lines.push(`Channels in use: ${mb.channels_assigned} of ${mb.channel_capacity}`);
+            if (mb.sensors_without_channel > 0) {
+                lines.push(`${mb.sensors_without_channel} sensor(s) have no channel because all channels are in use`);
             }
             if (mb.running) {
                 lines.push(mb.last_request_age_s === null
@@ -1178,135 +1178,135 @@
             } catch (err) {
                 document.getElementById('modbus-info').textContent = 'Could not load Modbus settings';
             }
-            await loadModbusSlots();
+            await loadModbusChannels();
         }
 
-        let modbusSlots = [];
-        let modbusSlotCapacity = 100;
+        let modbusChannels = [];
+        let modbusChannelCapacity = 100;
 
-        const MB_SLOT_STATUS_LABELS = {
+        const MB_CHANNEL_STATUS_LABELS = {
             ok: 'OK', missing: 'Missing', read_error: 'Read error', stale: 'Stale', unassigned: 'Unassigned',
         };
 
-        function slotSensorLabel(s) {
+        function channelSensorLabel(s) {
             return s.name ? `"${s.name}"` : s.address;
         }
 
-        /* Pure helper: checks a move request against the current slot list.
-           Returns { ok, error, swapWith } where swapWith is the slot entry
-           already in the target slot (the two will swap). */
-        function planSlotMove(slots, from, to, capacity) {
+        /* Pure helper: checks a move request against the current channel list.
+           Returns { ok, error, swapWith } where swapWith is the channel entry
+           already in the target channel (the two will swap). */
+        function planChannelMove(channels, from, to, capacity) {
             if (!Number.isInteger(to) || to < 0 || to >= capacity) {
-                return { ok: false, error: `Slot must be between 0 and ${capacity - 1}` };
+                return { ok: false, error: `Channel must be between 0 and ${capacity - 1}` };
             }
-            if (to === from) return { ok: false, error: `The sensor is already in slot ${to}` };
-            const swapWith = slots.find((s) => s.slot === to) || null;
+            if (to === from) return { ok: false, error: `The sensor is already in channel ${to}` };
+            const swapWith = channels.find((s) => s.channel === to) || null;
             return { ok: true, error: null, swapWith };
         }
 
-        function renderModbusSlots(data) {
-            modbusSlots = data.slots || [];
-            modbusSlotCapacity = data.slot_capacity || 100;
-            const container = document.getElementById('modbus-slots');
+        function renderModbusChannels(data) {
+            modbusChannels = data.channels || [];
+            modbusChannelCapacity = data.channel_capacity || 100;
+            const container = document.getElementById('modbus-channels');
             container.textContent = '';
-            if (modbusSlots.length === 0) {
-                container.textContent = 'No sensors have a slot yet. Slots are given out automatically when sensors are found.';
+            if (modbusChannels.length === 0) {
+                container.textContent = 'No sensors have a channel yet. Channels are given out automatically when sensors are found.';
                 return;
             }
             const table = document.createElement('table');
-            table.className = 'mb-slot-table';
+            table.className = 'mb-channel-table';
             const head = table.createTHead().insertRow();
-            ['Slot', 'Register', 'Sensor', 'Status', 'Temp', ''].forEach((t) => {
+            ['Channel', 'Register', 'Sensor', 'Status', 'Temp', ''].forEach((t) => {
                 const th = document.createElement('th');
                 th.textContent = t;
                 head.appendChild(th);
             });
             const body = table.createTBody();
-            for (const s of modbusSlots) {
+            for (const s of modbusChannels) {
                 const row = body.insertRow();
-                row.dataset.slot = s.slot;
-                row.insertCell().textContent = s.slot;
+                row.dataset.channel = s.channel;
+                row.insertCell().textContent = s.channel;
                 row.insertCell().textContent = s.temp_register;
 
                 const sensorCell = row.insertCell();
                 sensorCell.appendChild(document.createTextNode(s.name || 'Unnamed sensor'));
                 const addr = document.createElement('span');
-                addr.className = 'mb-slot-addr';
+                addr.className = 'mb-channel-addr';
                 addr.textContent = s.address;
                 sensorCell.appendChild(addr);
 
                 const statusCell = row.insertCell();
-                statusCell.className = 'mb-slot-status ' + (s.status === 'ok' ? 'mb-slot-status-ok' : 'mb-slot-status-bad');
-                statusCell.textContent = MB_SLOT_STATUS_LABELS[s.status] || s.status;
+                statusCell.className = 'mb-channel-status ' + (s.status === 'ok' ? 'mb-channel-status-ok' : 'mb-channel-status-bad');
+                statusCell.textContent = MB_CHANNEL_STATUS_LABELS[s.status] || s.status;
 
                 row.insertCell().textContent = s.temperature === null || s.temperature === undefined
                     ? '—' : `${s.temperature.toFixed(2)}°C`;
 
                 const actions = row.insertCell();
-                actions.className = 'mb-slot-actions';
+                actions.className = 'mb-channel-actions';
                 const input = document.createElement('input');
                 input.type = 'number';
                 input.min = 0;
-                input.max = modbusSlotCapacity - 1;
-                input.placeholder = 'slot';
-                input.className = 'mb-slot-move-input';
-                input.setAttribute('aria-label', `New slot for slot ${s.slot}`);
+                input.max = modbusChannelCapacity - 1;
+                input.placeholder = 'channel';
+                input.className = 'mb-channel-move-input';
+                input.setAttribute('aria-label', `New channel for channel ${s.channel}`);
                 actions.appendChild(input);
                 const moveBtn = document.createElement('button');
                 moveBtn.type = 'button';
-                moveBtn.className = 'btn btn-secondary mb-slot-move';
+                moveBtn.className = 'btn btn-secondary mb-channel-move';
                 moveBtn.textContent = 'Move';
-                moveBtn.addEventListener('click', () => moveModbusSlot(s.slot, input.value));
+                moveBtn.addEventListener('click', () => moveModbusChannel(s.channel, input.value));
                 actions.appendChild(moveBtn);
                 if (!s.present) {
                     const releaseBtn = document.createElement('button');
                     releaseBtn.type = 'button';
-                    releaseBtn.className = 'btn btn-danger mb-slot-release';
+                    releaseBtn.className = 'btn btn-danger mb-channel-release';
                     releaseBtn.textContent = 'Release';
-                    releaseBtn.addEventListener('click', () => releaseModbusSlot(s));
+                    releaseBtn.addEventListener('click', () => releaseModbusChannel(s));
                     actions.appendChild(releaseBtn);
                 }
             }
             container.appendChild(table);
         }
 
-        async function loadModbusSlots() {
+        async function loadModbusChannels() {
             try {
-                const resp = await fetch('/api/modbus/slots', {cache: 'no-store'});
+                const resp = await fetch('/api/modbus/channels', {cache: 'no-store'});
                 if (checkAuthError(resp)) return;
-                if (resp.ok) renderModbusSlots(await resp.json());
-                else document.getElementById('modbus-slots').textContent = 'Could not load slots';
+                if (resp.ok) renderModbusChannels(await resp.json());
+                else document.getElementById('modbus-channels').textContent = 'Could not load channels';
             } catch (err) {
-                document.getElementById('modbus-slots').textContent = 'Could not load slots';
+                document.getElementById('modbus-channels').textContent = 'Could not load channels';
             }
         }
 
-        async function postModbusSlotAction(body) {
+        async function postModbusChannelAction(body) {
             try {
-                const resp = await fetch('/api/modbus/slots', {
+                const resp = await fetch('/api/modbus/channels', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
                 });
                 if (checkAuthError(resp)) return;
                 const result = await resp.json().catch(() => ({}));
-                showToast(result.message || (resp.ok ? 'Done' : 'Slot change failed'), !resp.ok);
-                if (Array.isArray(result.slots)) renderModbusSlots(result);
-                else await loadModbusSlots();
-            } catch (err) { showToast('Error changing slots', true); }
+                showToast(result.message || (resp.ok ? 'Done' : 'Channel change failed'), !resp.ok);
+                if (Array.isArray(result.channels)) renderModbusChannels(result);
+                else await loadModbusChannels();
+            } catch (err) { showToast('Error changing channels', true); }
         }
 
-        async function moveModbusSlot(from, value) {
+        async function moveModbusChannel(from, value) {
             const to = value === '' ? NaN : Number(value);
-            const plan = planSlotMove(modbusSlots, from, to, modbusSlotCapacity);
+            const plan = planChannelMove(modbusChannels, from, to, modbusChannelCapacity);
             if (!plan.ok) { showToast(plan.error, true); return; }
-            if (plan.swapWith && !confirm(`Slot ${to} is used by ${slotSensorLabel(plan.swapWith)}. Swap the two sensors?`)) return;
-            await postModbusSlotAction({ action: 'move', from, to });
+            if (plan.swapWith && !confirm(`Channel ${to} is used by ${channelSensorLabel(plan.swapWith)}. Swap the two sensors?`)) return;
+            await postModbusChannelAction({ action: 'move', from, to });
         }
 
-        async function releaseModbusSlot(s) {
-            if (!confirm(`Release slot ${s.slot} (${slotSensorLabel(s)})? Its registers will read as unassigned, and the slot can be given to the next new sensor. If the sensor comes back it gets a new slot.`)) return;
-            await postModbusSlotAction({ action: 'release', slot: s.slot });
+        async function releaseModbusChannel(s) {
+            if (!confirm(`Release channel ${s.channel} (${channelSensorLabel(s)})? Its registers will read as unassigned, and the channel can be given to the next new sensor. If the sensor comes back it gets a new channel.`)) return;
+            await postModbusChannelAction({ action: 'release', channel: s.channel });
         }
 
         document.getElementById('modbus-form').addEventListener('submit', async (e) => {
@@ -1525,7 +1525,7 @@
 
         /* istanbul ignore next -- exposed only for Node test harness, no-op in browser */
         if (typeof module !== 'undefined' && module.exports) {
-            module.exports = { buildBackupQuery, restoreFileLabelState, planSlotMove };
+            module.exports = { buildBackupQuery, restoreFileLabelState, planChannelMove };
         }
 
         function openBackupModal() {
@@ -1574,7 +1574,7 @@
 
         async function restoreBackup() {
             if (!restoreFile) return;
-            if (!confirm('This will overwrite sensor names, Modbus slots and any settings included in the backup file, then restart the device. Continue?')) return;
+            if (!confirm('This will overwrite sensor names, Modbus channels and any settings included in the backup file, then restart the device. Continue?')) return;
             try {
                 const text = await restoreFile.text();
                 JSON.parse(text); /* validate before sending */

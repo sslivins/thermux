@@ -42,7 +42,7 @@ tags:
   - name: Configuration
     description: Device configuration endpoints
   - name: Modbus
-    description: Modbus TCP server settings and sensor slots
+    description: Modbus TCP server settings and sensor channels
   - name: Authentication
     description: Login, logout, and session management
   - name: OTA
@@ -781,34 +781,34 @@ paths:
         '500':
           description: The server couldn't start with the new settings; previous settings kept
 
-  /api/modbus/slots:
+  /api/modbus/channels:
     get:
       tags:
         - Modbus
-      summary: List Modbus sensor slots
-      description: Assigned slots with the status and temperature Modbus clients currently read.
-      operationId: getModbusSlots
+      summary: List Modbus sensor channels
+      description: Assigned channels with the status and temperature Modbus clients currently read.
+      operationId: getModbusChannels
       security:
         - sessionCookie: []
         - apiKey: []
       responses:
         '200':
-          description: Assigned slots
+          description: Assigned channels
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ModbusSlotList'
+                $ref: '#/components/schemas/ModbusChannelList'
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
       tags:
         - Modbus
-      summary: Move or release a slot
+      summary: Move or release a channel
       description: |
         `move` puts the sensor in `from` into `to`; if `to` is in use, the two sensors swap.
-        `release` frees the slot of a sensor that is no longer connected; slots of connected
+        `release` frees the channel of a sensor that is no longer connected; channels of connected
         sensors can't be released. Changes are saved and applied to the registers immediately.
-      operationId: changeModbusSlot
+      operationId: changeModbusChannel
       security:
         - sessionCookie: []
         - apiKey: []
@@ -832,11 +832,11 @@ paths:
                       minimum: 0
                       maximum: 99
                 - type: object
-                  required: [action, slot]
+                  required: [action, channel]
                   properties:
                     action:
                       const: release
-                    slot:
+                    channel:
                       type: integer
                       minimum: 0
                       maximum: 99
@@ -844,24 +844,24 @@ paths:
               move:
                 value: { action: move, from: 0, to: 10 }
               release:
-                value: { action: release, slot: 4 }
+                value: { action: release, channel: 4 }
       responses:
         '200':
-          description: Change applied; returns the updated slot list
+          description: Change applied; returns the updated channel list
           content:
             application/json:
               schema:
                 allOf:
                   - $ref: '#/components/schemas/SuccessResponse'
-                  - $ref: '#/components/schemas/ModbusSlotList'
+                  - $ref: '#/components/schemas/ModbusChannelList'
         '400':
           description: |
-            Refused (bad slot number, empty source slot, connected sensor, unknown action).
-            `message` says why; the unchanged slot list is included.
+            Refused (bad channel number, empty source channel, connected sensor, unknown action).
+            `message` says why; the unchanged channel list is included.
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
-          description: The slot table couldn't be saved
+          description: The channel table couldn't be saved
 
   /api/wifi/scan:
     get:
@@ -1374,11 +1374,11 @@ components:
           type: integer
           description: Number of failed reads for this sensor (CRC errors, etc.)
           example: 0
-        modbus_slot:
+        modbus_channel:
           anyOf:
             - type: integer
             - type: "null"
-          description: Modbus slot (0-99) assigned to this sensor, or null if it has none
+          description: Modbus channel (0-99) assigned to this sensor, or null if it has none
           example: 3
 
     ModbusStatus:
@@ -1409,28 +1409,28 @@ components:
         map_version:
           type: integer
           example: 1
-        slot_capacity:
+        channel_capacity:
           type: integer
           example: 100
-        slots_assigned:
+        channels_assigned:
           type: integer
-        sensors_without_slot:
+        sensors_without_channel:
           type: integer
-          description: Connected sensors with no slot because all 100 are in use
+          description: Connected sensors with no channel because all 100 are in use
 
-    ModbusSlot:
+    ModbusChannel:
       type: object
       properties:
-        slot:
+        channel:
           type: integer
           example: 3
         temp_register:
           type: integer
-          description: Input register holding this slot's temperature (100 + slot)
+          description: Input register holding this channel's temperature (100 + channel)
           example: 103
         address:
           type: string
-          description: ROM ID of the sensor in this slot
+          description: ROM ID of the sensor in this channel
           example: "28FF1234567890AB"
         name:
           anyOf:
@@ -1443,7 +1443,7 @@ components:
         status:
           type: string
           enum: [ok, missing, read_error, stale]
-          description: Status Modbus clients currently read for this slot
+          description: Status Modbus clients currently read for this channel
         temperature:
           anyOf:
             - type: number
@@ -1451,17 +1451,17 @@ components:
           description: Temperature Modbus clients currently read, or null when the status isn't ok
           example: 21.5
 
-    ModbusSlotList:
+    ModbusChannelList:
       type: object
       properties:
-        slot_capacity:
+        channel_capacity:
           type: integer
           example: 100
-        slots:
+        channels:
           type: array
-          description: Assigned slots only, in slot order
+          description: Assigned channels only, in channel order
           items:
-            $ref: '#/components/schemas/ModbusSlot'
+            $ref: '#/components/schemas/ModbusChannel'
 
     SensorConfig:
       type: object
