@@ -4,8 +4,9 @@ const { startMockServer } = require('../mock-server');
 
 /**
  * Browser-level tests for the Modbus channel table: it lists assigned channels,
- * moves (with a swap confirmation when the target is used) and only offers
- * Release for sensors that are no longer connected.
+ * edits a channel number inline (pencil -> input, Enter/Escape), moves with a
+ * swap confirmation when the target is used, and only offers Release for
+ * sensors that are no longer connected.
  */
 
 function channel(n, address, extra = {}) {
@@ -26,6 +27,82 @@ test.describe('Modbus channel table', () => {
     function row(page, n) {
         return page.locator(`#modbus-channels tr[data-channel="${n}"]`);
     }
+
+    async function editTo(page, n, value) {
+        await row(page, n).locator('.mb-channel-edit').click();
+        await row(page, n).locator('.mb-channel-input').fill(value);
+        await row(page, n).locator('.mb-channel-save').click();
+    }
+
+    function channelPosts() {
+        return mock.requests.filter((r) => r.method === 'POST' && r.path === '/api/modbus/channels');
+    }
+
+    test('the pencil opens an editor with the current channel selected', async ({ page }) => {
+        mock = await startMockServer();
+        mock.state.modbusChannels = [channel(3, '28FF000000000001')];
+        await page.goto(`${mock.baseURL}/config`);
+
+        await expect(row(page, 3).locator('.mb-channel-input')).toHaveCount(0);
+        await row(page, 3).locator('.mb-channel-edit').click();
+        const input = row(page, 3).locator('.mb-channel-input');
+        await expect(input).toBeFocused();
+        await expect(input).toHaveValue('3');
+        await expect(row(page, 3).locator('.mb-channel-edit')).toHaveCount(0);
+    });
+
+    test('Enter saves the new channel', async ({ page }) => {
+        mock = await startMockServer();
+        mock.state.modbusChannels = [channel(0, '28FF000000000001', { name: 'Supply' })];
+        await page.goto(`${mock.baseURL}/config`);
+
+        await row(page, 0).locator('.mb-channel-edit').click();
+        await row(page, 0).locator('.mb-channel-input').fill('7');
+        await row(page, 0).locator('.mb-channel-input').press('Enter');
+
+        await expect(row(page, 7)).toContainText('Supply');
+        expect(JSON.parse(channelPosts()[0].body)).toEqual({ action: 'move', from: 0, to: 7 });
+    });
+
+    test('Escape and the cancel button close the editor without saving', async ({ page }) => {
+        mock = await startMockServer();
+        mock.state.modbusChannels = [channel(0, '28FF000000000001')];
+        await page.goto(`${mock.baseURL}/config`);
+
+        await row(page, 0).locator('.mb-channel-edit').click();
+        await row(page, 0).locator('.mb-channel-input').fill('9');
+        await row(page, 0).locator('.mb-channel-input').press('Escape');
+        await expect(row(page, 0).locator('.mb-channel-input')).toHaveCount(0);
+        await expect(row(page, 0).locator('.mb-channel-edit')).toBeFocused();
+
+        await row(page, 0).locator('.mb-channel-edit').click();
+        await row(page, 0).locator('.mb-channel-cancel').click();
+        await expect(row(page, 0).locator('.mb-channel-input')).toHaveCount(0);
+        expect(channelPosts()).toHaveLength(0);
+    });
+
+    test('saving an unchanged channel just closes the editor', async ({ page }) => {
+        mock = await startMockServer();
+        mock.state.modbusChannels = [channel(2, '28FF000000000001')];
+        await page.goto(`${mock.baseURL}/config`);
+
+        await row(page, 2).locator('.mb-channel-edit').click();
+        await row(page, 2).locator('.mb-channel-save').click();
+        await expect(row(page, 2).locator('.mb-channel-input')).toHaveCount(0);
+        expect(channelPosts()).toHaveLength(0);
+    });
+
+    test('only one row is edited at a time', async ({ page }) => {
+        mock = await startMockServer();
+        mock.state.modbusChannels = [channel(0, '28FF000000000001'), channel(1, '28FF000000000002')];
+        await page.goto(`${mock.baseURL}/config`);
+
+        await row(page, 0).locator('.mb-channel-edit').click();
+        await row(page, 1).locator('.mb-channel-edit').click();
+        await expect(row(page, 0).locator('.mb-channel-input')).toHaveCount(0);
+        await expect(row(page, 0).locator('.mb-channel-edit')).toHaveCount(1);
+        await expect(row(page, 1).locator('.mb-channel-input')).toBeFocused();
+    });
 
     test('lists assigned channels with register, name, status and temperature', async ({ page }) => {
         mock = await startMockServer();
@@ -88,8 +165,7 @@ test.describe('Modbus channel table', () => {
 
         let asked = false;
         page.on('dialog', (d) => { asked = true; d.accept(); });
-        await row(page, 0).locator('.mb-channel-move-input').fill('10');
-        await row(page, 0).locator('.mb-channel-move').click();
+        await editTo(page, 0, '10');
 
         await expect(page.locator('#toast')).toContainText('Moved channel 0 to channel 10');
         await expect(row(page, 10)).toContainText('Supply');
@@ -109,8 +185,7 @@ test.describe('Modbus channel table', () => {
 
         let dialogMessage = '';
         page.once('dialog', (d) => { dialogMessage = d.message(); d.accept(); });
-        await row(page, 0).locator('.mb-channel-move-input').fill('1');
-        await row(page, 0).locator('.mb-channel-move').click();
+        await editTo(page, 0, '1');
 
         await expect(page.locator('#toast')).toContainText('Moved channel 0 to channel 1');
         expect(dialogMessage).toContain('"Return"');
@@ -124,8 +199,7 @@ test.describe('Modbus channel table', () => {
         await page.goto(`${mock.baseURL}/config`);
 
         page.once('dialog', (d) => d.dismiss());
-        await row(page, 0).locator('.mb-channel-move-input').fill('1');
-        await row(page, 0).locator('.mb-channel-move').click();
+        await editTo(page, 0, '1');
 
         await page.waitForTimeout(200);
         expect(mock.requests.some((r) => r.method === 'POST' && r.path === '/api/modbus/channels')).toBe(false);
@@ -136,10 +210,10 @@ test.describe('Modbus channel table', () => {
         mock.state.modbusChannels = [channel(0, '28FF000000000001')];
         await page.goto(`${mock.baseURL}/config`);
 
-        await row(page, 0).locator('.mb-channel-move-input').fill('100');
-        await row(page, 0).locator('.mb-channel-move').click();
+        await editTo(page, 0, '100');
 
         await expect(page.locator('#toast')).toContainText('between 0 and 99');
+        await expect(row(page, 0).locator('.mb-channel-input')).toBeFocused();
         expect(mock.requests.some((r) => r.method === 'POST' && r.path === '/api/modbus/channels')).toBe(false);
     });
 });
