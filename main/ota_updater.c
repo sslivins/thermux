@@ -219,6 +219,15 @@ static esp_err_t ota_check_for_update_internal(void)
     ESP_LOGD(TAG, "API URL: %s", url);
     
     char *response_buffer = NULL;
+
+    /* Build the result in locals and publish it only if the whole check
+     * succeeds, so a check in flight (or a failed one) never hides an update
+     * found earlier: clearing the flag up front made "Update" answer "No
+     * update available" while the 60 s boot check or a daily check ran. */
+    char latest[sizeof(s_latest_version)] = {0};
+    char dl_url[sizeof(s_download_url)] = {0};
+    bool available = false;
+    bool is_prerelease = false;
     
     esp_http_client_config_t config = {
         .url = url,
@@ -281,17 +290,16 @@ static esp_err_t ota_check_for_update_internal(void)
                  * (beta) so the UI can label it clearly. In stable mode this
                  * is always false (GitHub's /releases/latest never returns a
                  * pre-release); in beta mode it reflects the picked release. */
-                s_latest_is_prerelease = cJSON_IsTrue(prerelease);
+                is_prerelease = cJSON_IsTrue(prerelease);
 
                 if (cJSON_IsString(tag_name)) {
-                    strncpy(s_latest_version, tag_name->valuestring, sizeof(s_latest_version) - 1);
-                    s_latest_version[sizeof(s_latest_version) - 1] = '\0';  /* Ensure null termination */
-                    ESP_LOGD(TAG, "Latest version: %s", s_latest_version);
+                    strncpy(latest, tag_name->valuestring, sizeof(latest) - 1);
+                    ESP_LOGD(TAG, "Latest version: %s", latest);
                     
                     /* Compare versions */
-                    if (version_compare(s_latest_version, APP_VERSION) > 0) {
-                        s_update_available = true;
-                        ESP_LOGI(TAG, "Update available: %s -> %s", APP_VERSION, s_latest_version);
+                    if (version_compare(latest, APP_VERSION) > 0) {
+                        available = true;
+                        ESP_LOGI(TAG, "Update available: %s -> %s", APP_VERSION, latest);
                         
                         /* Find the application firmware binary among the release
                          * assets. Releases also ship bootloader.bin and
@@ -300,7 +308,7 @@ static esp_err_t ota_check_for_update_internal(void)
                          * bootloader fallback to the factory image. Prefer the
                          * exact app asset "<repo>.bin"; fall back to any .bin
                          * that is not the bootloader or partition table. */
-                        s_download_url[0] = '\0';
+                        dl_url[0] = '\0';
                         char expected_app[64];
                         snprintf(expected_app, sizeof(expected_app), "%s.bin", CONFIG_GITHUB_REPO);
                         if (cJSON_IsArray(assets)) {
@@ -329,10 +337,10 @@ static esp_err_t ota_check_for_update_internal(void)
                                 
                                 if (strcmp(nm, expected_app) == 0) {
                                     /* Exact match on the app binary — use it */
-                                    strncpy(s_download_url, browser_url->valuestring,
-                                            sizeof(s_download_url) - 1);
-                                    s_download_url[sizeof(s_download_url) - 1] = '\0';
-                                    ESP_LOGD(TAG, "Firmware URL: %s", s_download_url);
+                                    strncpy(dl_url, browser_url->valuestring,
+                                            sizeof(dl_url) - 1);
+                                    dl_url[sizeof(dl_url) - 1] = '\0';
+                                    ESP_LOGD(TAG, "Firmware URL: %s", dl_url);
                                     fallback_url = NULL;
                                     break;
                                 }
@@ -341,15 +349,15 @@ static esp_err_t ota_check_for_update_internal(void)
                                     fallback_url = browser_url->valuestring;
                                 }
                             }
-                            if (s_download_url[0] == '\0' && fallback_url != NULL) {
-                                strncpy(s_download_url, fallback_url, sizeof(s_download_url) - 1);
-                                s_download_url[sizeof(s_download_url) - 1] = '\0';
+                            if (dl_url[0] == '\0' && fallback_url != NULL) {
+                                strncpy(dl_url, fallback_url, sizeof(dl_url) - 1);
+                                dl_url[sizeof(dl_url) - 1] = '\0';
                                 ESP_LOGW(TAG, "App asset '%s' not found; using fallback: %s",
-                                         expected_app, s_download_url);
+                                         expected_app, dl_url);
                             }
-                            if (s_download_url[0] == '\0') {
+                            if (dl_url[0] == '\0') {
                                 ESP_LOGE(TAG, "No suitable firmware .bin asset found in release");
-                                s_update_available = false;
+                                available = false;
                             }
                         }
                     } else {
@@ -388,6 +396,13 @@ static esp_err_t ota_check_for_update_internal(void)
     if (response_buffer) {
         free(response_buffer);
     }
+
+    if (err == ESP_OK && s_update_state != OTA_UPDATE_DOWNLOADING) {
+        memcpy(s_latest_version, latest, sizeof(s_latest_version));
+        memcpy(s_download_url, dl_url, sizeof(s_download_url));
+        s_latest_is_prerelease = is_prerelease;
+        s_update_available = available;
+    }
     
     esp_http_client_cleanup(client);
     return err;
@@ -399,8 +414,6 @@ static esp_err_t ota_check_for_update_internal(void)
 esp_err_t ota_check_for_update(void)
 {
     ESP_LOGD(TAG, "Checking for updates...");
-    
-    s_update_available = false;
     
     esp_err_t err = ESP_FAIL;
     int retry_delay_ms = OTA_CHECK_RETRY_DELAY_MS;
@@ -450,11 +463,8 @@ esp_err_t ota_check_for_update_async(void)
         return ESP_ERR_INVALID_STATE;
     }
     
-    /* Reset state for new check */
+    /* The previous result stays visible until this check succeeds */
     s_check_state = OTA_CHECK_IN_PROGRESS;
-    s_update_available = false;
-    s_latest_is_prerelease = false;
-    s_latest_version[0] = '\0';
     
     /* Create task with 8KB stack - enough for HTTPS + TLS */
     BaseType_t ret = xTaskCreate(ota_check_task, "ota_check", 8192, NULL, 5, &s_check_task_handle);

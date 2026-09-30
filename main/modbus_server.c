@@ -15,7 +15,6 @@
 #include "modbus_server.h"
 #include "sensor_manager.h"
 
-#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
@@ -51,6 +50,7 @@ static const char *TAG = "modbus";
 #define WATCHDOG_PERIOD_MS    30000
 
 extern uint32_t get_sensor_read_interval(void);
+extern const char *APP_VERSION;
 
 /* esp-modbus hands handlers a pointer to the PDU inside the received MBAP
  * frame, so the MBAP unit ID is the byte just before it (MB_TCP_UID = 6,
@@ -670,7 +670,9 @@ esp_err_t modbus_server_init(void)
     }
 
     esp_read_mac(s_mac, ESP_MAC_ETH);
-    modbus_parse_version(esp_app_get_description()->version, s_fw_version);
+    /* APP_VERSION, not esp_app_desc: the latter is git describe at build time,
+     * which lags a release built before its tag exists. */
+    modbus_parse_version(APP_VERSION, s_fw_version);
 
     modbus_config_t cfg = s_cfg;
     load_config(&cfg);
