@@ -49,6 +49,8 @@ idf_component_register(
         "time_sync.c"
         "modbus_map.c"
         "modbus_server.c"
+        "bacnet_map.c"
+        "bacnet_server.c"
     INCLUDE_DIRS "."
     REQUIRES 
         nvs_flash
@@ -68,6 +70,7 @@ idf_component_register(
         esp-tls
         esp_app_format
         espressif__esp-modbus
+        bacnet-stack
     EMBED_FILES
         "${HTML_BUILD_DIR}/index.html.gz"
         "${HTML_BUILD_DIR}/config.html.gz"

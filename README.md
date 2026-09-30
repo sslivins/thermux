@@ -8,6 +8,7 @@ A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assi
 - **Optimized Parallel Reads** - Uses 1-Wire skip ROM command to read all sensors simultaneously (~1050ms for 20 sensors in 12-bit mode, ~450ms in 9-bit)
 - **Home Assistant Integration** - MQTT auto-discovery for seamless integration
 - **Modbus TCP** - Optional read-only Modbus TCP server so PLCs and heat pump controllers can read temperatures directly (see [Modbus TCP](#modbus-tcp))
+- **BACnet/IP** - Optional read-only BACnet/IP server for building-automation systems (see [BACnet/IP](#bacnetip))
 - **Web Interface** - Configuration and monitoring via built-in web server
 - **Sensor Identification** - Change detection highlighting helps identify which physical sensor is which
 - **Custom Sensor Names** - Assign friendly names to sensors via web UI (persisted in NVS)
