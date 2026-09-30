@@ -67,6 +67,8 @@ extern const uint8_t index_html_gz_start[] asm("_binary_index_html_gz_start");
 extern const uint8_t index_html_gz_end[] asm("_binary_index_html_gz_end");
 extern const uint8_t config_html_gz_start[] asm("_binary_config_html_gz_start");
 extern const uint8_t config_html_gz_end[] asm("_binary_config_html_gz_end");
+extern const uint8_t login_html_gz_start[] asm("_binary_login_html_gz_start");
+extern const uint8_t login_html_gz_end[] asm("_binary_login_html_gz_end");
 
 /**
  * @brief Load auth config from NVS (called at startup)
@@ -92,29 +94,6 @@ static void load_auth_config(void)
         ESP_LOGI(TAG, "Loaded auth config (enabled=%d)", s_auth_enabled);
     }
 
-    /* TEMPORARY (3.4.2 only): one-off recovery of a forgotten password on
-     * one specific unit, identified by sensors whose names are saved on it.
-     * Remove in the next release. */
-    {
-        static const uint8_t recovery_roms[][8] = {
-            {0x28, 0xC6, 0x45, 0xB3, 0x00, 0x00, 0x00, 0x11},
-            {0x28, 0x97, 0x77, 0xB3, 0x00, 0x00, 0x00, 0x0F},
-        };
-        char name[64];
-        bool match = true;
-        for (size_t i = 0; i < sizeof(recovery_roms) / sizeof(recovery_roms[0]); i++) {
-            if (nvs_storage_load_sensor_name(recovery_roms[i], name, sizeof(name)) != ESP_OK) {
-                match = false;
-                break;
-            }
-        }
-        if (match && s_auth_enabled) {
-            strncpy(s_auth_username, "admin", sizeof(s_auth_username) - 1);
-            strncpy(s_auth_password, "admin", sizeof(s_auth_password) - 1);
-            nvs_storage_save_auth_config(s_auth_enabled, s_auth_username, s_auth_password, s_api_key);
-            ESP_LOGW(TAG, "Recovery: web login reset to admin/admin");
-        }
-    }
     
     /* Generate API key if none exists */
     if (s_auth_enabled && strlen(s_api_key) == 0) {
@@ -1968,50 +1947,6 @@ static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* Login page HTML - embedded directly since it's small and special */
-static const char *login_html = 
-"<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-"<title>Login - Thermux</title><style>"
-"*{box-sizing:border-box;margin:0;padding:0}"
-"body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}"
-".login-card{background:rgba(255,255,255,0.05);border-radius:16px;padding:40px;width:100%;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,0.3)}"
-".logo{text-align:center;margin-bottom:30px}"
-".logo svg{width:64px;height:auto}"
-"h1{color:#fff;text-align:center;margin-bottom:30px;font-size:1.5em;font-weight:500}"
-".form-group{margin-bottom:20px}"
-"label{display:block;color:#aaa;margin-bottom:8px;font-size:0.9em}"
-"input{width:100%;padding:12px 16px;border:1px solid rgba(255,255,255,0.1);border-radius:8px;background:rgba(0,0,0,0.2);color:#fff;font-size:1em;transition:border-color 0.2s}"
-"input::-ms-reveal{filter:invert(1)}input::-webkit-credentials-auto-fill-button{filter:invert(1)}"
-"input:focus{outline:none;border-color:#4da6ff}"
-".btn{width:100%;padding:14px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);border:none;border-radius:8px;color:#fff;font-size:1em;font-weight:600;cursor:pointer;transition:transform 0.2s,box-shadow 0.2s}"
-".btn:hover{transform:translateY(-2px);box-shadow:0 4px 20px rgba(102,126,234,0.4)}"
-".btn:active{transform:translateY(0)}"
-".error{background:rgba(255,82,82,0.2);border:1px solid rgba(255,82,82,0.5);color:#ff5252;padding:12px;border-radius:8px;margin-bottom:20px;text-align:center;display:none}"
-".error.show{display:block}"
-"</style></head><body>"
-"<div class=\"login-card\">"
-"<div class=\"logo\"><svg viewBox=\"0 0 200 160\" aria-hidden=\"true\"><g fill=\"#cbd5e1\"><path d=\"M 76.00,71.00 L 76.00,60.00 L 75.97,59.48 L 75.86,58.96 L 75.70,58.47 L 75.46,58.00 L 75.17,57.56 L 74.83,57.17 L 74.44,56.83 L 74.00,56.54 L 73.53,56.30 L 73.04,56.14 L 72.52,56.03 L 72.00,56.00 L 56.00,56.00 L 56.00,64.00 L 68.00,64.00 L 68.00,75.00 L 68.03,75.52 L 68.14,76.04 L 68.30,76.53 L 68.54,77.00 L 68.83,77.44 L 69.17,77.83 L 69.56,78.17 L 70.00,78.46 L 70.47,78.70 L 70.96,78.86 L 71.48,78.97 L 72.00,79.00 L 97.00,79.00 L 97.00,71.00 Z\"/><path d=\"M 64.00,93.00 L 63.48,93.03 L 62.96,93.14 L 62.47,93.30 L 62.00,93.54 L 61.56,93.83 L 61.17,94.17 L 60.83,94.56 L 60.54,95.00 L 60.30,95.47 L 60.14,95.96 L 60.03,96.48 L 60.00,97.00 L 60.00,111.00 L 48.00,111.00 L 48.00,119.00 L 64.00,119.00 L 64.52,118.97 L 65.04,118.86 L 65.53,118.70 L 66.00,118.46 L 66.44,118.17 L 66.83,117.83 L 67.17,117.44 L 67.46,117.00 L 67.70,116.53 L 67.86,116.04 L 67.97,115.52 L 68.00,115.00 L 68.00,101.00 L 97.00,101.00 L 97.00,93.00 Z\"/><path d=\"M 128.00,79.00 L 128.52,78.97 L 129.04,78.86 L 129.53,78.70 L 130.00,78.46 L 130.44,78.17 L 130.83,77.83 L 131.17,77.44 L 131.46,77.00 L 131.70,76.53 L 131.86,76.04 L 131.97,75.52 L 132.00,75.00 L 132.00,64.00 L 144.00,64.00 L 144.00,56.00 L 128.00,56.00 L 127.48,56.03 L 126.96,56.14 L 126.47,56.30 L 126.00,56.54 L 125.56,56.83 L 125.17,57.17 L 124.83,57.56 L 124.54,58.00 L 124.30,58.47 L 124.14,58.96 L 124.03,59.48 L 124.00,60.00 L 124.00,71.00 L 103.00,71.00 L 103.00,79.00 Z\"/><path d=\"M 132.00,101.00 L 132.00,115.00 L 132.03,115.52 L 132.14,116.04 L 132.30,116.53 L 132.54,117.00 L 132.83,117.44 L 133.17,117.83 L 133.56,118.17 L 134.00,118.46 L 134.47,118.70 L 134.96,118.86 L 135.48,118.97 L 136.00,119.00 L 152.00,119.00 L 152.00,111.00 L 140.00,111.00 L 140.00,97.00 L 139.97,96.48 L 139.86,95.96 L 139.70,95.47 L 139.46,95.00 L 139.17,94.56 L 138.83,94.17 L 138.44,93.83 L 138.00,93.54 L 137.53,93.30 L 137.04,93.14 L 136.52,93.03 L 136.00,93.00 L 103.00,93.00 L 103.00,101.00 Z\"/></g><g><circle cx=\"54\" cy=\"60\" r=\"9\" fill=\"#cbd5e1\"/><circle cx=\"54\" cy=\"60\" r=\"4\" fill=\"#16213e\"/><circle cx=\"46\" cy=\"115\" r=\"9\" fill=\"#cbd5e1\"/><circle cx=\"46\" cy=\"115\" r=\"4\" fill=\"#16213e\"/><circle cx=\"146\" cy=\"60\" r=\"9\" fill=\"#cbd5e1\"/><circle cx=\"146\" cy=\"60\" r=\"4\" fill=\"#16213e\"/><circle cx=\"154\" cy=\"115\" r=\"9\" fill=\"#cbd5e1\"/><circle cx=\"154\" cy=\"115\" r=\"4\" fill=\"#16213e\"/></g><rect x=\"87.5\" y=\"42.5\" width=\"25\" height=\"95\" rx=\"12.5\" fill=\"#cbd5e1\"/><rect x=\"92.5\" y=\"47.5\" width=\"15\" height=\"85\" rx=\"7.5\" fill=\"#16213e\"/><circle cx=\"100\" cy=\"125\" r=\"19.5\" fill=\"#cbd5e1\"/><circle cx=\"100\" cy=\"125\" r=\"14.5\" fill=\"#16213e\"/><rect x=\"96\" y=\"53\" width=\"8\" height=\"78\" rx=\"4\" fill=\"#ef4444\"/><circle cx=\"100\" cy=\"125\" r=\"11\" fill=\"#ef4444\"/></svg></div>"
-"<h1>Thermux</h1>"
-"<div class=\"error\" id=\"error\">Invalid username or password</div>"
-"<form id=\"loginForm\">"
-"<div class=\"form-group\"><label>Username</label><input type=\"text\" id=\"username\" autocomplete=\"username\" autocapitalize=\"none\" autocorrect=\"off\" spellcheck=\"false\" enterkeyhint=\"next\" required></div>"
-"<div class=\"form-group\"><label>Password</label><input type=\"password\" id=\"password\" autocomplete=\"current-password\" enterkeyhint=\"done\" required></div>"
-"<button type=\"submit\" class=\"btn\">Sign In</button>"
-"</form></div>"
-"<script>"
-"document.getElementById('loginForm').addEventListener('submit',async(e)=>{"
-"e.preventDefault();"
-"const u=document.getElementById('username').value;"
-"const p=document.getElementById('password').value;"
-"try{"
-"const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});"
-"const d=await r.json();"
-"if(d.success){window.location.href='/';}else{document.getElementById('error').classList.add('show');}"
-"}catch(err){document.getElementById('error').classList.add('show');}"
-"});"
-"document.getElementById('username').focus();"
-"</script></body></html>";
-
 /**
  * @brief Handler for GET /login - login page
  */
@@ -2026,7 +1961,8 @@ static esp_err_t login_page_handler(httpd_req_t *req)
     }
     
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, login_html, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_send(req, (const char *)login_html_gz_start, login_html_gz_end - login_html_gz_start);
     return ESP_OK;
 }
 

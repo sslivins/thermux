@@ -71,4 +71,5 @@ idf_component_register(
     EMBED_FILES
         "${HTML_BUILD_DIR}/index.html.gz"
         "${HTML_BUILD_DIR}/config.html.gz"
+        "${HTML_BUILD_DIR}/login.html.gz"
 )

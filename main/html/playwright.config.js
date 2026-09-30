@@ -1,7 +1,7 @@
 // @ts-check
 const { defineConfig, devices } = require('@playwright/test');
 
-const MOBILE_SPECS = /(confirm-dialog|modbus-channels)\.spec\.js$/;
+const MOBILE_SPECS = /(confirm-dialog|modbus-channels|login)\.spec\.js$/;
 
 /**
  * Playwright config for the Thermux embedded web UI.
