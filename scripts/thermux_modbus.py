@@ -4,6 +4,8 @@ Read a Thermux (or any Modbus TCP device) over Modbus TCP.
 
     python scripts/thermux_modbus.py 192.168.1.205
     python scripts/thermux_modbus.py thermux.local --watch 5
+    python scripts/thermux_modbus.py thermux.local channel 3
+    python scripts/thermux_modbus.py thermux.local channel 3 --value
     python scripts/thermux_modbus.py 192.168.1.50 --port 5020 --unit 3 raw 100 10
     python scripts/thermux_modbus.py 192.168.1.50 raw 40 4 --fc 3
 
@@ -136,6 +138,32 @@ def print_thermux(dev):
               f"{age:>6}  {roms.get(ch, '')}")
 
 
+def read_channel(dev, ch):
+    """Temperature, status, age and ROM ID of one channel, all from the same read cycle."""
+    for _ in range(5):
+        cycle = dev.read(5, 1)[0]
+        temp, status, age = (dev.read(base + ch, 1)[0] for base in (100, 200, 300))
+        rom = "".join(f"{r:04X}" for r in dev.read(1000 + 4 * ch, 4)) if status != 1 else ""
+        if dev.read(5, 1)[0] == cycle:
+            return temp, status, age, rom
+    raise ReadError("values kept changing mid-read (read cycle counter moved 5 times)")
+
+
+def print_channels(dev, channels, value_only):
+    for ch in channels:
+        temp, status, age, rom = read_channel(dev, ch)
+        ok = temp != UNASSIGNED_TEMP
+        if value_only:
+            print(f"{signed(temp) / 100:.2f}" if ok else "nan")
+            continue
+        t = f"{signed(temp) / 100:.2f} °C" if ok else "—"
+        age = "never read" if age == 0xFFFF else f"{age} s old"
+        line = f"Channel {ch} (register {100 + ch}): {t}, {STATUS.get(status, status)}"
+        if status != 1:
+            line += f", {age}, ROM {rom}"
+        print(line)
+
+
 def print_raw(dev, address, count, fc):
     regs = dev.read(address, count, fc)
     kind = "input" if fc == 4 else "holding"
@@ -154,7 +182,11 @@ def main():
     p.add_argument("--watch", type=float, metavar="SECONDS",
                    help="repeat every SECONDS until Ctrl+C")
     sub = p.add_subparsers(dest="cmd")
-    raw = sub.add_parser("raw", help="read any address range")
+    chan = sub.add_parser("channel", help="read one or more Thermux channels")
+    chan.add_argument("channels", type=int, nargs="+", metavar="N", help="channel number (0-99)")
+    chan.add_argument("--value", action="store_true",
+                      help="print only the temperature in °C (nan if not OK), one per line")
+    raw =  sub.add_parser("raw", help="read any address range")
     raw.add_argument("address", type=int, help="zero-based start address")
     raw.add_argument("count", type=int, help="number of registers")
     raw.add_argument("--fc", type=int, choices=(3, 4), default=4,
@@ -163,6 +195,8 @@ def main():
 
     if args.cmd == "raw" and not (0 <= args.address <= 65535 and 1 <= args.count <= 65536 - args.address):
         p.error("address must be 0..65535 and the range must end at or before 65535")
+    if args.cmd == "channel" and not all(0 <= ch <= 99 for ch in args.channels):
+        p.error("channels are 0..99")
 
     try:
         with Device(args.host, args.port, args.unit, args.timeout) as dev:
@@ -171,6 +205,8 @@ def main():
                     print(time.strftime("%H:%M:%S"))
                 if args.cmd == "raw":
                     print_raw(dev, args.address, args.count, args.fc)
+                elif args.cmd == "channel":
+                    print_channels(dev, args.channels, args.value)
                 else:
                     print_thermux(dev)
                 if not args.watch:
