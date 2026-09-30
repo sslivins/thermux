@@ -1,6 +1,7 @@
 // @ts-check
 const { test, expect } = require('@playwright/test');
 const { startMockServer } = require('../mock-server');
+const { answerConfirm } = require('./confirm-helpers');
 
 /**
  * Browser-level tests for the Modbus channel table: it lists assigned channels,
@@ -147,9 +148,8 @@ test.describe('Modbus channel table', () => {
         ];
         await page.goto(`${mock.baseURL}/config`);
 
-        let dialogMessage = '';
-        page.once('dialog', (d) => { dialogMessage = d.message(); d.accept(); });
         await row(page, 1).locator('.mb-channel-release').click();
+        const dialogMessage = await answerConfirm(page, true);
 
         await expect(page.locator('#toast')).toContainText('Released channel 1');
         await expect(row(page, 1)).toHaveCount(0);
@@ -163,14 +163,12 @@ test.describe('Modbus channel table', () => {
         mock.state.modbusChannels = [channel(0, '28FF000000000001', { name: 'Supply' })];
         await page.goto(`${mock.baseURL}/config`);
 
-        let asked = false;
-        page.on('dialog', (d) => { asked = true; d.accept(); });
         await editTo(page, 0, '10');
 
         await expect(page.locator('#toast')).toContainText('Moved channel 0 to channel 10');
         await expect(row(page, 10)).toContainText('Supply');
         await expect(row(page, 10)).toContainText('110');
-        expect(asked).toBe(false);
+        await expect(page.locator('#confirm-dialog')).toBeHidden();
         const post = mock.requests.find((r) => r.method === 'POST' && r.path === '/api/modbus/channels');
         expect(JSON.parse(post.body)).toEqual({ action: 'move', from: 0, to: 10 });
     });
@@ -183,9 +181,8 @@ test.describe('Modbus channel table', () => {
         ];
         await page.goto(`${mock.baseURL}/config`);
 
-        let dialogMessage = '';
-        page.once('dialog', (d) => { dialogMessage = d.message(); d.accept(); });
         await editTo(page, 0, '1');
+        const dialogMessage = await answerConfirm(page, true);
 
         await expect(page.locator('#toast')).toContainText('Moved channel 0 to channel 1');
         expect(dialogMessage).toContain('"Return"');
@@ -198,8 +195,8 @@ test.describe('Modbus channel table', () => {
         mock.state.modbusChannels = [channel(0, '28FF000000000001'), channel(1, '28FF000000000002')];
         await page.goto(`${mock.baseURL}/config`);
 
-        page.once('dialog', (d) => d.dismiss());
         await editTo(page, 0, '1');
+        await answerConfirm(page, false);
 
         await page.waitForTimeout(200);
         expect(mock.requests.some((r) => r.method === 'POST' && r.path === '/api/modbus/channels')).toBe(false);

@@ -95,6 +95,7 @@
             border: none;
             border-radius: 8px;
             cursor: pointer;
+            font-family: inherit;
             font-size: 1em;
             transition: background 0.2s, opacity 0.2s;
             margin-right: 10px;
@@ -150,6 +151,37 @@
         }
         .toast.show { opacity: 1; }
         .toast.error { background: #ef4444; }
+        /* Themed replacement for window.confirm(). Centered card on desktop,
+           bottom sheet with full-width stacked buttons on phones. */
+        .confirm-dialog {
+            width: min(440px, calc(100vw - 32px));
+            max-height: calc(100dvh - 32px);
+            margin: auto;
+            padding: 0;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 14px;
+            background: #1f2847;
+            color: #fff;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+            overflow-y: auto;
+        }
+        .confirm-dialog::backdrop { background: rgba(0,0,0,0.6); }
+        html:has(.confirm-dialog[open]) { overflow: hidden; }
+        .confirm-dialog form { padding: 22px; }
+        .confirm-dialog h3 { font-size: 1.15em; margin-bottom: 10px; }
+        .confirm-dialog p { color: #ccc; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
+        .confirm-dialog-buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+        .confirm-dialog-buttons .btn { margin: 0; min-height: 44px; }
+        .confirm-dialog-buttons .btn:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+        @media (max-width: 520px) {
+            .confirm-dialog {
+                width: auto;
+                max-width: none;
+                margin: auto 12px max(12px, env(safe-area-inset-bottom));
+            }
+            .confirm-dialog-buttons { flex-direction: column-reverse; }
+            .confirm-dialog-buttons .btn { width: 100%; }
+        }
         .current-value { font-size: 0.85em; color: #888; margin-bottom: 8px; }
         .mb-channels { margin-top: 20px; }
         #modbus-channels { overflow-x: auto; }
@@ -182,6 +214,8 @@
         .mb-channel-input {
             width: 4.5em;
             padding: 4px 6px;
+            font-family: inherit;
+            font-size: 16px;
             border: 1px solid rgba(255,255,255,0.3);
             border-radius: 6px;
             background: rgba(255,255,255,0.1);
@@ -578,6 +612,17 @@
 
 
     <div class="toast" id="toast"></div>
+
+    <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message">
+        <form method="dialog">
+            <h3 id="confirm-dialog-title"></h3>
+            <p id="confirm-dialog-message"></p>
+            <div class="confirm-dialog-buttons">
+                <button type="submit" value="cancel" class="btn btn-secondary" id="confirm-dialog-cancel">Cancel</button>
+                <button type="submit" value="ok" class="btn btn-primary" id="confirm-dialog-ok">OK</button>
+            </div>
+        </form>
+    </dialog>
 
     <script>
         let updateAvailable = false;
@@ -1374,13 +1419,22 @@
             const to = value === '' ? NaN : Number(value);
             const plan = planChannelMove(modbusChannels, from, to, modbusChannelCapacity);
             if (!plan.ok) { showToast(plan.error, true); return false; }
-            if (plan.swapWith && !confirm(`Channel ${to} is used by ${channelSensorLabel(plan.swapWith)}. Swap the two sensors?`)) return false;
+            if (plan.swapWith && !await confirmDialog({
+                title: 'Swap channels?',
+                message: `Channel ${to} is used by ${channelSensorLabel(plan.swapWith)}. The two sensors will trade channels.`,
+                confirmText: 'Swap sensors'
+            })) return false;
             await postModbusChannelAction({ action: 'move', from, to });
             return true;
         }
 
         async function releaseModbusChannel(s) {
-            if (!confirm(`Release channel ${s.channel} (${channelSensorLabel(s)})? Its registers will read as unassigned, and the channel can be given to the next new sensor. If the sensor comes back it gets a new channel.`)) return;
+            if (!await confirmDialog({
+                title: `Release channel ${s.channel}?`,
+                message: `${channelSensorLabel(s)} will lose this channel. Its registers will read as unassigned, and the channel can be given to the next new sensor. If the sensor comes back, it gets a new channel.`,
+                confirmText: 'Release channel',
+                danger: true
+            })) return;
             await postModbusChannelAction({ action: 'release', channel: s.channel });
         }
 
@@ -1566,14 +1620,28 @@
         }
 
         async function restartDevice() {
-            if (!confirm('Are you sure you want to restart the device?')) return;
+            if (!await confirmDialog({
+                title: 'Restart the device?',
+                message: 'Thermux will be offline for a few seconds while it restarts.',
+                confirmText: 'Restart'
+            })) return;
             try { await fetch('/api/system/restart', { method: 'POST' }); showToast('Device restarting...'); }
             catch (err) { showToast('Restart command sent'); }
         }
 
         async function factoryReset() {
-            if (!confirm('⚠️ This will erase ALL settings including sensor names!\n\nAre you sure?')) return;
-            if (!confirm('Last chance! This cannot be undone. Continue?')) return;
+            if (!await confirmDialog({
+                title: 'Erase all settings?',
+                message: 'This erases ALL settings, including sensor names, and restarts the device.',
+                confirmText: 'Continue',
+                danger: true
+            })) return;
+            if (!await confirmDialog({
+                title: 'Last chance',
+                message: 'This cannot be undone.',
+                confirmText: 'Erase everything',
+                danger: true
+            })) return;
             try {
                 const resp = await fetch('/api/system/factory-reset', { method: 'POST' });
                 if (resp.ok) { showToast('Factory reset complete. Restarting...'); }
@@ -1649,7 +1717,12 @@
 
         async function restoreBackup() {
             if (!restoreFile) return;
-            if (!confirm('This will overwrite sensor names, Modbus channels and any settings included in the backup file, then restart the device. Continue?')) return;
+            if (!await confirmDialog({
+                title: 'Restore this backup?',
+                message: 'This will overwrite sensor names, Modbus channels and any settings included in the backup file, then restart the device.',
+                confirmText: 'Restore and restart',
+                danger: true
+            })) return;
             try {
                 const text = await restoreFile.text();
                 JSON.parse(text); /* validate before sending */
@@ -1753,7 +1826,12 @@
         }
 
         async function regenerateApiKey() {
-            if (!confirm('Are you sure you want to regenerate the API key? Any existing integrations using the current key will stop working.')) {
+            if (!await confirmDialog({
+                title: 'Regenerate the API key?',
+                message: 'Any existing integrations using the current key will stop working until you give them the new one.',
+                confirmText: 'Regenerate key',
+                danger: true
+            })) {
                 return;
             }
             
@@ -1810,6 +1888,41 @@
             toast.className = 'toast show' + (isError ? ' error' : '');
             setTimeout(() => toast.className = 'toast', 3000);
         }
+
+        /**
+         * Themed, promise-based replacement for window.confirm().
+         * Resolves true only when the confirm button is pressed; Cancel,
+         * Escape (or Android back) and tapping the backdrop resolve false.
+         * With danger set, the confirm button is red and Cancel gets focus.
+         */
+        function confirmDialog({ title = '', message = '', confirmText = 'OK', cancelText = 'Cancel', danger = false } = {}) {
+            const dlg = document.getElementById('confirm-dialog');
+            if (typeof dlg.showModal !== 'function') {
+                return Promise.resolve(window.confirm([title, message].filter(Boolean).join('\n\n')));
+            }
+            if (dlg.open) dlg.close('cancel');
+            const titleEl = document.getElementById('confirm-dialog-title');
+            const okBtn = document.getElementById('confirm-dialog-ok');
+            const cancelBtn = document.getElementById('confirm-dialog-cancel');
+            titleEl.textContent = title;
+            titleEl.hidden = !title;
+            document.getElementById('confirm-dialog-message').textContent = message;
+            okBtn.textContent = confirmText;
+            okBtn.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
+            cancelBtn.textContent = cancelText;
+            dlg.returnValue = '';
+            return new Promise((resolve) => {
+                dlg.addEventListener('close', () => resolve(dlg.returnValue === 'ok'), { once: true });
+                dlg.showModal();
+                (danger ? cancelBtn : okBtn).focus();
+            });
+        }
+
+        /* The form fills the dialog, so a click whose target is the dialog
+           itself landed on the backdrop. */
+        document.getElementById('confirm-dialog').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) e.currentTarget.close('cancel');
+        });
 
         loadConfig();
         loadLogLevel();

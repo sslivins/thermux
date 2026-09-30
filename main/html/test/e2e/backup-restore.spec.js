@@ -1,12 +1,13 @@
 // @ts-check
 const { test, expect } = require('@playwright/test');
 const { startMockServer } = require('../mock-server');
+const { answerConfirm } = require('./confirm-helpers');
 
 /**
  * Browser-level tests for the "Backup / Restore" feature in config.html.
  *
  * These exercise real DOM interactions (clicks, checkbox toggles, file
- * upload, native confirm() dialog, download event) against the actual
+ * upload, the themed confirm dialog, download event) against the actual
  * config.html served by a minimal mock server (see ../mock-server.js).
  *
  * Scope: this suite verifies the DOM/JS glue wires up correctly - the right
@@ -118,13 +119,8 @@ test.describe('Backup / Restore modal', () => {
             buffer: Buffer.from(JSON.stringify(backupContents)),
         });
 
-        let dialogMessage = '';
-        page.once('dialog', (dialog) => {
-            dialogMessage = dialog.message();
-            dialog.accept();
-        });
-
         await page.locator('#restore-btn').click();
+        const dialogMessage = await answerConfirm(page, true);
 
         await expect(page.locator('#toast')).toContainText('Restore complete. Device restarting...');
         expect(dialogMessage).toContain('restart the device');
@@ -141,8 +137,8 @@ test.describe('Backup / Restore modal', () => {
             buffer: Buffer.from(JSON.stringify({ schema_version: 1, sensor_names: [], sensor_settings: {} })),
         });
 
-        page.once('dialog', (dialog) => dialog.dismiss());
         await page.locator('#restore-btn').click();
+        await answerConfirm(page, false);
 
         // Give any (incorrect) fetch a moment to fire before asserting it didn't.
         await page.waitForTimeout(200);
@@ -156,8 +152,8 @@ test.describe('Backup / Restore modal', () => {
             buffer: Buffer.from('{"not": "valid backup", '), // truncated/invalid JSON
         });
 
-        page.once('dialog', (dialog) => dialog.accept());
         await page.locator('#restore-btn').click();
+        await answerConfirm(page, true);
 
         await expect(page.locator('#toast')).toContainText('invalid backup file');
     });

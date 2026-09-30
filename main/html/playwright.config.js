@@ -1,6 +1,8 @@
 // @ts-check
 const { defineConfig, devices } = require('@playwright/test');
 
+const MOBILE_SPECS = /(confirm-dialog|modbus-channels)\.spec\.js$/;
+
 /**
  * Playwright config for the Thermux embedded web UI.
  *
@@ -22,5 +24,9 @@ module.exports = defineConfig({
     },
     projects: [
         { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+        /* Phone-sized runs for the touch-heavy UI (the confirm dialog and the
+           Modbus channel editor). WebKit is Safari's engine, i.e. iOS. */
+        { name: 'mobile-chrome', use: { ...devices['Pixel 7'] }, testMatch: MOBILE_SPECS },
+        { name: 'mobile-safari', use: { ...devices['iPhone 14'] }, testMatch: MOBILE_SPECS },
     ],
 });
