@@ -212,6 +212,15 @@ While the server is running, Thermux advertises it over mDNS as `_mbap._tcp`, wi
 
 ### Examples
 
+The repo includes a small reader, `scripts/thermux_modbus.py` (needs `pip install pymodbus`). With just an address it decodes the whole map; `raw` reads any range from any Modbus TCP device:
+
+```bash
+python scripts/thermux_modbus.py thermux.local               # device info + every channel
+python scripts/thermux_modbus.py thermux.local --watch 5     # repeat every 5 s
+python scripts/thermux_modbus.py 192.168.1.50 --port 502 --unit 1 raw 100 6          # input registers
+python scripts/thermux_modbus.py 192.168.1.50 raw 0 10 --fc 3                        # holding registers
+```
+
 [mbpoll](https://github.com/epsilonrt/mbpoll), temperatures of channels 0–5 (`-0` makes addresses zero-based):
 
 ```bash
