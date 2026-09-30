@@ -52,7 +52,7 @@ jobs:
 
     - name: Install Playwright browsers
       working-directory: main/html
-      run: npx playwright install --with-deps chromium
+      run: npx playwright install --with-deps chromium webkit
 
     - name: Run Playwright browser tests
       working-directory: main/html
