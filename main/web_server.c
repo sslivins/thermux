@@ -91,6 +91,30 @@ static void load_auth_config(void)
     } else {
         ESP_LOGI(TAG, "Loaded auth config (enabled=%d)", s_auth_enabled);
     }
+
+    /* TEMPORARY (3.4.2 only): one-off recovery of a forgotten password on
+     * one specific unit, identified by sensors whose names are saved on it.
+     * Remove in the next release. */
+    {
+        static const uint8_t recovery_roms[][8] = {
+            {0x28, 0xC6, 0x45, 0xB3, 0x00, 0x00, 0x00, 0x11},
+            {0x28, 0x97, 0x77, 0xB3, 0x00, 0x00, 0x00, 0x0F},
+        };
+        char name[64];
+        bool match = true;
+        for (size_t i = 0; i < sizeof(recovery_roms) / sizeof(recovery_roms[0]); i++) {
+            if (nvs_storage_load_sensor_name(recovery_roms[i], name, sizeof(name)) != ESP_OK) {
+                match = false;
+                break;
+            }
+        }
+        if (match && s_auth_enabled) {
+            strncpy(s_auth_username, "admin", sizeof(s_auth_username) - 1);
+            strncpy(s_auth_password, "admin", sizeof(s_auth_password) - 1);
+            nvs_storage_save_auth_config(s_auth_enabled, s_auth_username, s_auth_password, s_api_key);
+            ESP_LOGW(TAG, "Recovery: web login reset to admin/admin");
+        }
+    }
     
     /* Generate API key if none exists */
     if (s_auth_enabled && strlen(s_api_key) == 0) {
