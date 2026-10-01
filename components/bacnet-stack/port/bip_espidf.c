@@ -86,6 +86,17 @@ void bip_set_interface(const char *ifname)
     refresh_netif();
 }
 
+/* Re-read the interface address (DHCP may hand out a new one after a link
+ * drop). Returns true if the address changed. */
+bool bip_espidf_refresh_address(void)
+{
+    struct in_addr before = s_addr;
+    if (!refresh_netif()) {
+        return false;
+    }
+    return before.s_addr != s_addr.s_addr;
+}
+
 bool bip_valid(void) { return s_socket >= 0 && s_addr.s_addr != 0; }
 
 void bip_get_my_address(BACNET_ADDRESS *addr)
@@ -266,18 +277,19 @@ uint16_t bip_receive(BACNET_ADDRESS *src, uint8_t *pdu, uint16_t max_pdu, unsign
     int ready = select(s_socket + 1, &rfds, NULL, NULL, &tv);
     if (ready <= 0) return 0;
 
-    uint8_t mtu[BIP_MPDU_MAX];
+    /* Receive straight into the caller's buffer and strip the BVLC header in
+     * place, rather than bouncing through a second 1.5 KB stack buffer. */
     struct sockaddr_in from;
     socklen_t from_len = sizeof(from);
-    int received = recvfrom(s_socket, mtu, sizeof(mtu), 0, (struct sockaddr *)&from, &from_len);
-    if (received <= 0 || received < 4 || mtu[0] != BVLL_TYPE_BACNET_IP) return 0;
+    int received = recvfrom(s_socket, pdu, max_pdu, 0, (struct sockaddr *)&from, &from_len);
+    if (received < 4 || pdu[0] != BVLL_TYPE_BACNET_IP) return 0;
     if (from.sin_addr.s_addr == s_addr.s_addr && ntohs(from.sin_port) == s_port) return 0;
 
     uint16_t bvlc_len = 0;
-    decode_unsigned16(&mtu[2], &bvlc_len);
+    decode_unsigned16(&pdu[2], &bvlc_len);
     if (bvlc_len > received) return 0;
 
-    uint8_t function = mtu[1];
+    uint8_t function = pdu[1];
     uint16_t offset = 0;
     if (function == BVLC_ORIGINAL_UNICAST_NPDU || function == BVLC_ORIGINAL_BROADCAST_NPDU) {
         offset = 4;
@@ -289,13 +301,13 @@ uint16_t bip_receive(BACNET_ADDRESS *src, uint8_t *pdu, uint16_t max_pdu, unsign
         offset = 10;
         memset(src, 0, sizeof(*src));
         src->mac_len = 6;
-        memcpy(&src->mac[0], &mtu[4], 4);
-        memcpy(&src->mac[4], &mtu[8], 2);
+        memcpy(&src->mac[0], &pdu[4], 4);
+        memcpy(&src->mac[4], &pdu[8], 2);
     } else {
         return 0;
     }
+    if (bvlc_len < offset) return 0;
     uint16_t npdu_len = bvlc_len - offset;
-    if (npdu_len > max_pdu) return 0;
-    memcpy(pdu, &mtu[offset], npdu_len);
+    memmove(pdu, &pdu[offset], npdu_len);
     return npdu_len;
 }

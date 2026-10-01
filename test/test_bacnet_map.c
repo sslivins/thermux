@@ -39,19 +39,21 @@ void test_bacnet_reliability_mapping(void)
 
 void test_bacnet_unique_names_fallback_and_dedupe(void)
 {
-    char existing[3][BACNET_OBJECT_NAME_MAX + 1] = {{0}};
+    const char *existing[3] = {NULL, NULL, NULL};
     char out[BACNET_OBJECT_NAME_MAX + 1];
     bacnet_make_unique_ai_name(NULL, 4, existing, 0, out, sizeof(out));
     TEST_ASSERT_EQUAL_STRING("Channel 4", out);
-    strcpy(existing[0], "Supply");
-    bacnet_make_unique_ai_name("Supply", 7, existing, 1, out, sizeof(out));
+    existing[1] = "Supply";
+    bacnet_make_unique_ai_name("Supply", 7, existing, 3, out, sizeof(out));
     TEST_ASSERT_EQUAL_STRING("Supply (7)", out);
+    bacnet_make_unique_ai_name("Return", 8, existing, 3, out, sizeof(out));
+    TEST_ASSERT_EQUAL_STRING("Return", out);
 }
 
 void test_bacnet_ai_identity_uses_rom_description(void)
 {
     uint8_t rom[MODBUS_ROM_LEN] = {0x28, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xEF};
-    char existing[1][BACNET_OBJECT_NAME_MAX + 1] = {{0}};
+    const char *existing[1] = {NULL};
     bacnet_ai_identity_t ident;
     bacnet_make_ai_identity(2, rom, "HP Return", existing, 0, &ident);
     TEST_ASSERT_EQUAL_STRING("HP Return", ident.object_name);

@@ -29,6 +29,7 @@ typedef struct {
     uint32_t packets;
     uint32_t objects;
     int64_t last_packet_ms;
+    uint32_t stack_free_min; /* bytes of BACnet task stack never used (0 when stopped) */
 } bacnet_status_t;
 
 esp_err_t bacnet_server_init(void);

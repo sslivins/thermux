@@ -15,7 +15,8 @@
 #define BACNET_DEFAULT_UDP_PORT 47808
 #define BACNET_MAX_DEVICE_INSTANCE 4194302U
 #define BACNET_DEVICE_NAME_MAX 63
-#define BACNET_OBJECT_NAME_MAX 63
+/* Friendly names are at most 31 chars; leaves room for a " (NN)" suffix. */
+#define BACNET_OBJECT_NAME_MAX 40
 #define BACNET_COV_INCREMENT_C 0.1f
 
 typedef enum {
@@ -36,7 +37,7 @@ bacnet_map_reliability_t bacnet_reliability_from_modbus_status(uint16_t status);
 bool bacnet_status_fault(uint16_t status);
 void bacnet_default_channel_name(unsigned channel, char *out, size_t out_size);
 void bacnet_clean_device_name(const char *input, const char *fallback, char *out, size_t out_size);
-void bacnet_make_unique_ai_name(const char *base, unsigned channel, char existing[][BACNET_OBJECT_NAME_MAX + 1], size_t existing_count, char *out, size_t out_size);
-void bacnet_make_ai_identity(unsigned channel, const uint8_t rom[MODBUS_ROM_LEN], const char *friendly_name, char existing[][BACNET_OBJECT_NAME_MAX + 1], size_t existing_count, bacnet_ai_identity_t *out);
+void bacnet_make_unique_ai_name(const char *base, unsigned channel, const char *const existing[], size_t existing_count, char *out, size_t out_size);
+void bacnet_make_ai_identity(unsigned channel, const uint8_t rom[MODBUS_ROM_LEN], const char *friendly_name, const char *const existing[], size_t existing_count, bacnet_ai_identity_t *out);
 
 #endif /* BACNET_MAP_H */

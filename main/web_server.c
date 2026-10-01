@@ -309,6 +309,15 @@ static bool check_api_auth(httpd_req_t *req)
 /**
  * @brief Handler for GET /
  */
+/* cJSON_Print* returns NULL when the heap is exhausted; never strlen() it. */
+static esp_err_t send_json_string(httpd_req_t *req, const char *json)
+{
+    if (json == NULL) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+    }
+    return httpd_resp_send(req, json, strlen(json));
+}
+
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
     CHECK_PAGE_AUTH(req);
@@ -396,7 +405,7 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -447,7 +456,7 @@ static esp_err_t api_sensors_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -469,7 +478,7 @@ static esp_err_t api_sensors_rescan_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -491,7 +500,7 @@ static esp_err_t api_error_stats_reset_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -533,7 +542,7 @@ static esp_err_t api_sensor_error_stats_reset_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     return ESP_OK;
@@ -619,7 +628,7 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
     cJSON_Delete(response);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -651,7 +660,7 @@ static esp_err_t api_ota_channel_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     return ESP_OK;
 }
@@ -735,7 +744,7 @@ static esp_err_t api_ota_check_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -792,7 +801,7 @@ static esp_err_t api_ota_status_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -815,7 +824,7 @@ static esp_err_t api_ota_update_handler(httpd_req_t *req)
         cJSON_Delete(root);
         
         httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req, json, strlen(json));
+        send_json_string(req, json);
         free(json);
         
         /* Start OTA in background */
@@ -828,7 +837,7 @@ static esp_err_t api_ota_update_handler(httpd_req_t *req)
         cJSON_Delete(root);
         
         httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req, json, strlen(json));
+        send_json_string(req, json);
         free(json);
     }
 #else
@@ -839,7 +848,7 @@ static esp_err_t api_ota_update_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 #endif
     
@@ -1042,7 +1051,7 @@ static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1103,7 +1112,7 @@ static esp_err_t api_logs_level_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     return ESP_OK;
 }
@@ -1180,7 +1189,7 @@ static esp_err_t api_config_wifi_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1238,7 +1247,7 @@ static esp_err_t api_config_wifi_post_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1275,7 +1284,7 @@ static esp_err_t api_config_mqtt_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1350,7 +1359,7 @@ static esp_err_t api_config_mqtt_post_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1375,7 +1384,7 @@ static esp_err_t api_mqtt_reconnect_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1451,7 +1460,7 @@ static esp_err_t api_config_sensor_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1533,7 +1542,7 @@ static esp_err_t api_config_sensor_post_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1555,7 +1564,7 @@ static esp_err_t api_system_restart_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     /* Delay restart to allow response to be sent */
@@ -1587,7 +1596,7 @@ static esp_err_t api_system_factory_reset_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     if (err == ESP_OK) {
@@ -1746,7 +1755,7 @@ static esp_err_t api_backup_get_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"thermux-backup.json\"");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     return ESP_OK;
@@ -1976,7 +1985,7 @@ static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
     cJSON_Delete(response);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     /* Delay restart to allow response to be sent */
@@ -2056,7 +2065,7 @@ static esp_err_t api_auth_login_handler(httpd_req_t *req)
     cJSON_Delete(response);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     return ESP_OK;
@@ -2105,7 +2114,7 @@ static esp_err_t api_auth_logout_handler(httpd_req_t *req)
     cJSON_Delete(response);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     return ESP_OK;
@@ -2129,7 +2138,7 @@ static esp_err_t api_auth_status_handler(httpd_req_t *req)
     cJSON_Delete(response);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     return ESP_OK;
@@ -2154,7 +2163,7 @@ static esp_err_t api_config_auth_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -2219,7 +2228,7 @@ static esp_err_t api_config_auth_post_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -2253,7 +2262,7 @@ static esp_err_t api_config_auth_regenerate_key_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -2309,6 +2318,7 @@ static void add_bacnet_status(cJSON *obj)
     cJSON_AddStringToObject(obj, "bound_ip", st.bound_ip);
     cJSON_AddNumberToObject(obj, "packets", st.packets);
     cJSON_AddNumberToObject(obj, "objects", st.objects);
+    cJSON_AddNumberToObject(obj, "stack_free_min", st.stack_free_min);
     if (st.last_packet_ms > 0) {
         int64_t age_s = (esp_timer_get_time() / 1000 - st.last_packet_ms) / 1000;
         cJSON_AddNumberToObject(obj, "last_packet_age_s", (double)age_s);
@@ -2326,7 +2336,7 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *root)
         return ESP_FAIL;
     }
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     return ESP_OK;
 }

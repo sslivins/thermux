@@ -62,17 +62,17 @@ void bacnet_clean_device_name(const char *input, const char *fallback, char *out
     snprintf(out, out_size, "%.*s", BACNET_DEVICE_NAME_MAX, src);
 }
 
-static bool name_exists(const char *candidate, char existing[][BACNET_OBJECT_NAME_MAX + 1], size_t count)
+static bool name_exists(const char *candidate, const char *const existing[], size_t count)
 {
     for (size_t i = 0; i < count; i++) {
-        if (strcmp(candidate, existing[i]) == 0) {
+        if (existing[i] != NULL && strcmp(candidate, existing[i]) == 0) {
             return true;
         }
     }
     return false;
 }
 
-void bacnet_make_unique_ai_name(const char *base, unsigned channel, char existing[][BACNET_OBJECT_NAME_MAX + 1], size_t existing_count, char *out, size_t out_size)
+void bacnet_make_unique_ai_name(const char *base, unsigned channel, const char *const existing[], size_t existing_count, char *out, size_t out_size)
 {
     char fallback[24];
     bacnet_default_channel_name(channel, fallback, sizeof(fallback));
@@ -107,7 +107,7 @@ void bacnet_make_unique_ai_name(const char *base, unsigned channel, char existin
     }
 }
 
-void bacnet_make_ai_identity(unsigned channel, const uint8_t rom[MODBUS_ROM_LEN], const char *friendly_name, char existing[][BACNET_OBJECT_NAME_MAX + 1], size_t existing_count, bacnet_ai_identity_t *out)
+void bacnet_make_ai_identity(unsigned channel, const uint8_t rom[MODBUS_ROM_LEN], const char *friendly_name, const char *const existing[], size_t existing_count, bacnet_ai_identity_t *out)
 {
     if (out == NULL) {
         return;

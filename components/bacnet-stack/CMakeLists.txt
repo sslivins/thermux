@@ -73,6 +73,12 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     BACAPP_TIMESTAMP=1
     MAX_APDU=1476
     MAX_TSM_TRANSACTIONS=1
+    MAX_ADDRESS_CACHE=8
+    # Every BACNET_APPLICATION_DATA_VALUE (COV, RP, RPM handlers keep them on the
+    # stack) reserves room for the longest string; the default is a whole APDU
+    # (~1.5 KB each). Thermux strings are <= 63 bytes.
+    MAX_CHARACTER_STRING_BYTES=128
+    MAX_OCTET_STRING_BYTES=32
     PRINT_ENABLED=0
     CONFIG_BACNET_BASIC_OBJECT_ANALOG_INPUT=1
     CONFIG_BACNET_BASIC_COV_SUBSCRIPTIONS_SIZE=16

@@ -40,7 +40,9 @@ static const char *TAG = "bacnet";
 #define NVS_KEY_INSTANCE "bn_inst"
 #define NVS_KEY_NAME "bn_name"
 
-#define TASK_STACK 8192
+/* Measured peak ~4.9 KB (RPM "all", confirmed COV, Who-Has) with the string
+ * limits set in components/bacnet-stack/CMakeLists.txt; see stack_free_min. */
+#define TASK_STACK 6656
 #define TASK_PRIO 4
 #define STOP_WAIT_MS 2000
 #define START_WAIT_MS 3000
@@ -70,28 +72,39 @@ static uint32_t s_objects;
 static int64_t s_last_packet_ms;
 static uint8_t s_mac[6];
 
-static modbus_channel_table_t s_pending_channels;
-static uint16_t s_pending_status[MODBUS_CHANNEL_COUNT];
-static uint16_t s_pending_temp[MODBUS_CHANNEL_COUNT];
-static uint16_t s_pending_rom[MB_REG_ROM_COUNT];
-static char s_pending_names[MODBUS_CHANNEL_COUNT][MAX_FRIENDLY_NAME_LEN];
-static bool s_pending_has_name[MODBUS_CHANNEL_COUNT];
-static bool s_snapshot_dirty;
-
-static bool s_ai_active[MODBUS_CHANNEL_COUNT];
-static char s_ai_names[MODBUS_CHANNEL_COUNT][BACNET_OBJECT_NAME_MAX + 1];
-static char s_ai_desc[MODBUS_CHANNEL_COUNT][MODBUS_ROM_LEN * 2 + 1];
-static float s_ai_values[MODBUS_CHANNEL_COUNT];
-static uint16_t s_ai_status[MODBUS_CHANNEL_COUNT];
-
+/* Working tables, heap-allocated only while the server runs so a unit with
+ * BACnet disabled pays (almost) nothing. Guarded by s_snapshot_lock:
+ * bacnet_server_update() fills the pending part, the BACnet task applies it.
+ * Object names/descriptions are allocated per active object because the
+ * stack keeps the pointers (Analog_Input_Name_Set does not copy). */
 typedef struct {
     modbus_channel_table_t channels;
     uint16_t status[MODBUS_CHANNEL_COUNT];
     uint16_t temp[MODBUS_CHANNEL_COUNT];
-    uint16_t rom_regs[MB_REG_ROM_COUNT];
-    char names[MODBUS_CHANNEL_COUNT][MAX_FRIENDLY_NAME_LEN];
-    bool has_name[MODBUS_CHANNEL_COUNT];
-} bacnet_snapshot_t;
+    bool dirty;
+    char *ai_name[MODBUS_CHANNEL_COUNT];
+    char *ai_desc[MODBUS_CHANNEL_COUNT];
+} bacnet_tables_t;
+
+static bacnet_tables_t *s_tbl;
+
+static void tables_free_locked(void)
+{
+    if (s_tbl == NULL) return;
+    for (unsigned ch = 0; ch < MODBUS_CHANNEL_COUNT; ch++) {
+        free(s_tbl->ai_name[ch]);
+        free(s_tbl->ai_desc[ch]);
+    }
+    free(s_tbl);
+    s_tbl = NULL;
+}
+
+static void refresh_pending_locked(void)
+{
+    modbus_server_get_channels(&s_tbl->channels);
+    modbus_server_get_channel_regs(s_tbl->status, s_tbl->temp, NULL);
+    s_tbl->dirty = true;
+}
 
 static inline int64_t uptime_ms(void) { return esp_timer_get_time() / 1000; }
 static void state_lock(void) { xSemaphoreTake(s_state_lock, portMAX_DELAY); }
@@ -240,82 +253,103 @@ static void register_handlers(void)
     handler_cov_init();
 }
 
+/* Friendly name for a ROM: live sensor list first, then the saved name (the
+ * sensor may be missing right now). */
+static bool lookup_name(const uint8_t rom[MODBUS_ROM_LEN], const managed_sensor_t *sensors, int count,
+                        char *out, size_t out_size)
+{
+    for (int i = 0; sensors != NULL && i < count; i++) {
+        if (memcmp(sensors[i].hw_sensor.address, rom, MODBUS_ROM_LEN) == 0) {
+            if (!sensors[i].has_friendly_name) break;
+            strlcpy(out, sensors[i].friendly_name, out_size);
+            return true;
+        }
+    }
+    return nvs_storage_load_sensor_name(rom, out, out_size) == ESP_OK;
+}
+
+static bool replace_string(char **slot, const char *value)
+{
+    if (*slot != NULL && strcmp(*slot, value) == 0) return false;
+    char *copy = strdup(value);
+    if (copy == NULL) return false;
+    free(*slot);
+    *slot = copy;
+    return true;
+}
+
 static void apply_snapshot_to_stack(void)
 {
     if (xSemaphoreTake(s_snapshot_lock, pdMS_TO_TICKS(5)) != pdTRUE) return;
-    if (!s_snapshot_dirty) {
+    if (s_tbl == NULL || !s_tbl->dirty) {
         xSemaphoreGive(s_snapshot_lock);
         return;
     }
-    bacnet_snapshot_t *snap = malloc(sizeof(*snap));
-    char (*existing)[BACNET_OBJECT_NAME_MAX + 1] = calloc(MODBUS_CHANNEL_COUNT, BACNET_OBJECT_NAME_MAX + 1);
-    if (snap == NULL || existing == NULL) {
-        free(snap);
-        free(existing);
-        xSemaphoreGive(s_snapshot_lock);
-        return;
-    }
-    snap->channels = s_pending_channels;
-    memcpy(snap->status, s_pending_status, sizeof(snap->status));
-    memcpy(snap->temp, s_pending_temp, sizeof(snap->temp));
-    memcpy(snap->rom_regs, s_pending_rom, sizeof(snap->rom_regs));
-    memcpy(snap->names, s_pending_names, sizeof(snap->names));
-    memcpy(snap->has_name, s_pending_has_name, sizeof(snap->has_name));
-    s_snapshot_dirty = false;
-    xSemaphoreGive(s_snapshot_lock);
-
-    size_t existing_count = 0;
+    /* Applied in place while holding the lock; bacnet_server_update() just
+     * waits briefly. */
+    int sensor_count = 0;
+    managed_sensor_t *sensors = sensor_manager_snapshot(&sensor_count);
+    const modbus_channel_table_t *channels = &s_tbl->channels;
     uint32_t object_count = 0;
     bool revision_needed = false;
 
     for (unsigned ch = 0; ch < MODBUS_CHANNEL_COUNT; ch++) {
-        if (!snap->channels.channels[ch].assigned) {
-            if (s_ai_active[ch]) {
+        bool active = s_tbl->ai_name[ch] != NULL;
+        if (!channels->channels[ch].assigned) {
+            if (active) {
                 Analog_Input_Delete(ch);
-                s_ai_active[ch] = false;
+                free(s_tbl->ai_name[ch]);
+                free(s_tbl->ai_desc[ch]);
+                s_tbl->ai_name[ch] = NULL;
+                s_tbl->ai_desc[ch] = NULL;
                 revision_needed = true;
             }
             continue;
         }
+        char friendly[MAX_FRIENDLY_NAME_LEN];
+        bool has_name = lookup_name(channels->channels[ch].rom, sensors, sensor_count, friendly, sizeof(friendly));
+        /* ai_name[0..ch-1] already hold this pass's final names (NULL for
+         * unused channels), so they double as the uniqueness list. */
         bacnet_ai_identity_t ident;
-        bacnet_make_ai_identity(ch, snap->channels.channels[ch].rom, snap->has_name[ch] ? snap->names[ch] : NULL,
-                                existing, existing_count, &ident);
-        strlcpy(existing[existing_count++], ident.object_name, BACNET_OBJECT_NAME_MAX + 1);
+        bacnet_make_ai_identity(ch, channels->channels[ch].rom, has_name ? friendly : NULL,
+                                (const char *const *)s_tbl->ai_name, ch, &ident);
 
-        bool needs_create = !s_ai_active[ch] || strcmp(s_ai_names[ch], ident.object_name) != 0 || strcmp(s_ai_desc[ch], ident.description) != 0;
-        if (!s_ai_active[ch]) {
+        if (!active) {
+            if (!replace_string(&s_tbl->ai_name[ch], ident.object_name)) continue; /* out of memory: retry next cycle */
             Analog_Input_Create(ch);
-            s_ai_active[ch] = true;
-        }
-        if (needs_create) {
-            strlcpy(s_ai_names[ch], ident.object_name, sizeof(s_ai_names[ch]));
-            strlcpy(s_ai_desc[ch], ident.description, sizeof(s_ai_desc[ch]));
-            Analog_Input_Name_Set(ch, s_ai_names[ch]);
-            Analog_Input_Description_Set(ch, s_ai_desc[ch]);
             Analog_Input_Units_Set(ch, UNITS_DEGREES_CELSIUS);
             Analog_Input_Out_Of_Service_Set(ch, false);
             Analog_Input_COV_Increment_Set(ch, BACNET_COV_INCREMENT_C);
+            Analog_Input_Name_Set(ch, s_tbl->ai_name[ch]);
+            revision_needed = true;
+        } else if (replace_string(&s_tbl->ai_name[ch], ident.object_name)) {
+            Analog_Input_Name_Set(ch, s_tbl->ai_name[ch]);
+            revision_needed = true;
+        }
+        if (replace_string(&s_tbl->ai_desc[ch], ident.description)) {
+            Analog_Input_Description_Set(ch, s_tbl->ai_desc[ch]);
             revision_needed = true;
         }
 
-        float value = temp_from_reg(snap->temp[ch]);
+        float value = temp_from_reg(s_tbl->temp[ch]);
         if (!isnan(value)) {
-            s_ai_values[ch] = value;
             Analog_Input_Present_Value_Set(ch, value);
         }
-        s_ai_status[ch] = snap->status[ch];
-        Analog_Input_Reliability_Set(ch, reliability_from_status(snap->status[ch]));
+        Analog_Input_Reliability_Set(ch, reliability_from_status(s_tbl->status[ch]));
         object_count++;
     }
+    s_tbl->dirty = false;
+    xSemaphoreGive(s_snapshot_lock);
+    free(sensors);
     if (revision_needed) {
         Device_Inc_Database_Revision();
     }
     state_lock();
     s_objects = object_count;
     state_unlock();
-    free(existing);
-    free(snap);
 }
+
+bool bip_espidf_refresh_address(void);
 
 static void update_bound_ip(void)
 {
@@ -333,16 +367,32 @@ static void bacnet_task(void *arg)
     free(arg);
 
     uint8_t rx[PDU_BUFFER_SIZE];
-    memset(s_ai_active, 0, sizeof(s_ai_active));
-    memset(s_ai_names, 0, sizeof(s_ai_names));
-    memset(s_ai_desc, 0, sizeof(s_ai_desc));
+    xSemaphoreTake(s_snapshot_lock, portMAX_DELAY);
+    tables_free_locked();
+    s_tbl = calloc(1, sizeof(*s_tbl));
+    if (s_tbl != NULL) {
+        refresh_pending_locked();
+    }
+    xSemaphoreGive(s_snapshot_lock);
+    if (s_tbl == NULL) {
+        s_task_start_err = ESP_ERR_NO_MEM;
+        xSemaphoreGive(s_start_sem);
+        s_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
 
     bip_set_port(cfg.udp_port);
     configure_device(&cfg);
     register_handlers();
     if (!bip_init(NULL)) {
+        Analog_Input_Cleanup();
+        xSemaphoreTake(s_snapshot_lock, portMAX_DELAY);
+        tables_free_locked();
+        xSemaphoreGive(s_snapshot_lock);
         s_task_start_err = ESP_FAIL;
         xSemaphoreGive(s_start_sem);
+        s_task = NULL;
         vTaskDelete(NULL);
         return;
     }
@@ -358,6 +408,8 @@ static void bacnet_task(void *arg)
     s_task_start_err = ESP_OK;
     xSemaphoreGive(s_start_sem);
     uint32_t cov_elapsed_ms = 0;
+    uint32_t addr_check_ms = 0;
+    int64_t last_ms = uptime_ms();
     while (!s_stop_task) {
         apply_snapshot_to_stack();
         BACNET_ADDRESS src = {0};
@@ -369,20 +421,45 @@ static void bacnet_task(void *arg)
             s_last_packet_ms = uptime_ms();
             state_unlock();
         }
-        tsm_timer_milliseconds(LOOP_TIMEOUT_MS);
-        Device_Timer(LOOP_TIMEOUT_MS);
-        cov_elapsed_ms += LOOP_TIMEOUT_MS;
+        int64_t now_ms = uptime_ms();
+        uint32_t elapsed_ms = (uint32_t)(now_ms - last_ms);
+        if (elapsed_ms == 0 && pdu_len == 0) {
+            /* receive returned at once (e.g. socket error while the link is
+             * down): yield so lower-priority tasks and the idle task run. */
+            vTaskDelay(pdMS_TO_TICKS(LOOP_TIMEOUT_MS));
+            now_ms = uptime_ms();
+            elapsed_ms = (uint32_t)(now_ms - last_ms);
+        }
+        last_ms = now_ms;
+        tsm_timer_milliseconds(elapsed_ms);
+        Device_Timer(elapsed_ms);
+        cov_elapsed_ms += elapsed_ms;
         if (cov_elapsed_ms >= 1000) {
             handler_cov_timer_seconds(cov_elapsed_ms / 1000);
-            cov_elapsed_ms = 0;
+            cov_elapsed_ms %= 1000;
         }
         handler_cov_task();
+        addr_check_ms += elapsed_ms;
+        if (addr_check_ms >= 5000) {
+            addr_check_ms = 0;
+            if (bip_espidf_refresh_address()) {
+                state_lock();
+                update_bound_ip();
+                state_unlock();
+                ESP_LOGI(TAG, "IP address changed to %s; announcing", s_bound_ip);
+                Send_I_Am(&rx[0]);
+            }
+        }
     }
 
     bip_cleanup();
     Analog_Input_Cleanup();
+    xSemaphoreTake(s_snapshot_lock, portMAX_DELAY);
+    tables_free_locked();
+    xSemaphoreGive(s_snapshot_lock);
     state_lock();
     s_running = false;
+    s_objects = 0;
     s_bound_ip[0] = '\0';
     state_unlock();
     s_task = NULL;
@@ -401,9 +478,14 @@ static void stop_server(void)
         vTaskDelete(s_task);
         s_task = NULL;
         bip_cleanup();
+        Analog_Input_Cleanup();
+        xSemaphoreTake(s_snapshot_lock, portMAX_DELAY);
+        tables_free_locked();
+        xSemaphoreGive(s_snapshot_lock);
     }
     state_lock();
     s_running = false;
+    s_objects = 0;
     state_unlock();
 }
 
@@ -439,10 +521,6 @@ esp_err_t bacnet_server_init(void)
     s_cfg.device_instance = bacnet_default_device_instance_from_mac(s_mac);
     load_config(&s_cfg);
     bacnet_clean_device_name(s_cfg.device_name, CONFIG_MDNS_HOSTNAME, s_cfg.device_name, sizeof(s_cfg.device_name));
-    modbus_server_get_channels(&s_pending_channels);
-    modbus_server_get_channel_regs(s_pending_status, s_pending_temp, s_pending_rom);
-    s_snapshot_dirty = true;
-
     esp_err_t err = ESP_OK;
     if (s_cfg.enabled) {
         err = start_server(&s_cfg);
@@ -453,43 +531,14 @@ esp_err_t bacnet_server_init(void)
 
 void bacnet_server_update(void)
 {
+    /* Called from temp_task (4 KB stack) every read cycle: cheap no-op unless
+     * the server is running; nothing channel-sized goes on the stack. */
     if (s_snapshot_lock == NULL) return;
-    modbus_channel_table_t channels;
-    uint16_t status[MODBUS_CHANNEL_COUNT];
-    uint16_t temp[MODBUS_CHANNEL_COUNT];
-    uint16_t rom[MB_REG_ROM_COUNT];
-    modbus_server_get_channels(&channels);
-    modbus_server_get_channel_regs(status, temp, rom);
-
-    managed_sensor_t *sensors = NULL;
-    int count = 0;
-    sensors = sensor_manager_snapshot(&count);
-
     xSemaphoreTake(s_snapshot_lock, portMAX_DELAY);
-    s_pending_channels = channels;
-    memcpy(s_pending_status, status, sizeof(s_pending_status));
-    memcpy(s_pending_temp, temp, sizeof(s_pending_temp));
-    memcpy(s_pending_rom, rom, sizeof(s_pending_rom));
-    memset(s_pending_has_name, 0, sizeof(s_pending_has_name));
-    memset(s_pending_names, 0, sizeof(s_pending_names));
-    for (int ch = 0; ch < MODBUS_CHANNEL_COUNT; ch++) {
-        if (!channels.channels[ch].assigned) continue;
-        for (int i = 0; sensors != NULL && i < count; i++) {
-            if (memcmp(sensors[i].hw_sensor.address, channels.channels[ch].rom, MODBUS_ROM_LEN) == 0 && sensors[i].has_friendly_name) {
-                strlcpy(s_pending_names[ch], sensors[i].friendly_name, sizeof(s_pending_names[ch]));
-                s_pending_has_name[ch] = true;
-                break;
-            }
-        }
-        if (!s_pending_has_name[ch]) {
-            if (nvs_storage_load_sensor_name(channels.channels[ch].rom, s_pending_names[ch], sizeof(s_pending_names[ch])) == ESP_OK) {
-                s_pending_has_name[ch] = true;
-            }
-        }
+    if (s_tbl != NULL) {
+        refresh_pending_locked();
     }
-    s_snapshot_dirty = true;
     xSemaphoreGive(s_snapshot_lock);
-    free(sensors);
 }
 
 esp_err_t bacnet_server_apply_config(const bacnet_config_t *cfg)
@@ -556,5 +605,8 @@ void bacnet_server_get_status(bacnet_status_t *out)
     out->packets = s_packets;
     out->objects = s_objects;
     out->last_packet_ms = s_last_packet_ms;
+    if (s_running && s_task != NULL) {
+        out->stack_free_min = uxTaskGetStackHighWaterMark(s_task);
+    }
     state_unlock();
 }
