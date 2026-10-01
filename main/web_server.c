@@ -2627,7 +2627,10 @@ static esp_err_t send_modbus_channels(httpd_req_t *req, cJSON *root)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
         return ESP_FAIL;
     }
+    modbus_status_t st;
+    modbus_server_get_status(&st);
     cJSON_AddNumberToObject(root, "channel_capacity", MODBUS_CHANNEL_COUNT);
+    cJSON_AddNumberToObject(root, "sensors_without_channel", st.sensors_without_channel);
     cJSON_AddItemToObject(root, "channels", channels);
     return send_json(req, root);
 }

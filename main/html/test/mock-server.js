@@ -94,6 +94,8 @@ function defaultState() {
         modbusFailMessage: null,
         /** Assigned Modbus channels, as returned by GET /api/modbus/channels */
         modbusChannels: [],
+        /** Sensors that found every channel taken, as reported by GET /api/modbus/channels */
+        sensorsWithoutChannel: 0,
         otaStatus: {
             checking: false,
             result: 1,
@@ -258,7 +260,9 @@ function createMockServer() {
             return sendJson(res, 200, { success: true, message: 'BACnet/IP settings saved', ...state.bacnet });
         }
         if (req.method === 'GET' && url.pathname === '/api/modbus/channels') {
-            return sendJson(res, 200, { channel_capacity: 100, channels: state.modbusChannels });
+            return sendJson(res, 200, {
+                channel_capacity: 100, sensors_without_channel: state.sensorsWithoutChannel, channels: state.modbusChannels,
+            });
         }
         if (req.method === 'POST' && url.pathname === '/api/modbus/channels') {
             let parsed;

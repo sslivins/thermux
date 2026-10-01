@@ -150,9 +150,9 @@ Modbus has no password. Anyone on the network can read the registers, but nothin
 
 ### Sensor channels
 
-Each sensor gets a **channel** (0–99) the first time it's seen, keyed by its ROM ID. A sensor keeps its channel when other sensors are added or removed, so a register address always refers to the same physical sensor. New sensors fill the lowest free channels, in ROM ID order.
+Each sensor gets a **channel** (0–99) the first time it's seen, keyed by its ROM ID. A sensor keeps its channel when other sensors are added or removed, so a register address (and BACnet object) always refers to the same physical sensor. New sensors fill the lowest free channels, in ROM ID order. Modbus TCP and BACnet/IP share the same channels: channel N is input register 100+N and BACnet Analog Input N.
 
-The channel table on the settings page shows each channel's register, sensor, and the status and temperature Modbus clients are currently reading. From there you can:
+The **Settings → Sensor Channels** section shows each channel's Modbus register, BACnet object, sensor, and the status and temperature clients are currently reading. From there you can:
 
 - **Move** a sensor to another channel. If that channel is in use, the two sensors swap.
 - **Release** the channel of a sensor that has been disconnected, so the channel can be reused. Channels of connected sensors can't be released; they would just be reassigned on the next read.
