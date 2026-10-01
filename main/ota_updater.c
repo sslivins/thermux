@@ -14,9 +14,12 @@
 #include "esp_https_ota.h"
 #include "esp_ota_ops.h"
 #include "esp_crt_bundle.h"
-#include "cJSON.h"
+#include "esp_system.h"
+#include "esp_heap_caps.h"
+#include "release_scan.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -31,21 +34,10 @@ extern const char *APP_VERSION;
 #define GITHUB_API_URL_LATEST "https://api.github.com/repos/%s/%s/releases/latest"
 /* GitHub API URL for the release list (newest first), used when the
  * pre-release/beta channel is enabled so drafts+prereleases are visible.
- * Kept small (per_page=2) so both the raw JSON response AND the cJSON parse
- * tree fit within available heap on this memory-constrained device. Each
- * GitHub release object is large (~9KB: full assets[] array where every
- * asset embeds a complete uploader user object). per_page=3 produced a
- * ~28KB response whose cJSON_Parse intermittently failed under heap
- * fragmentation (buffer grew fine, but the parse tree allocation ran out),
- * breaking prerelease update checks with "Failed to parse JSON response".
- * per_page=2 (~18KB) keeps a single draft-skip fallback slot while staying
- * close to the known-good ~9KB /releases/latest path. */
+ * The response is scanned as it streams in (see release_scan.c), so its size
+ * does not affect RAM; per_page=2 just keeps the download short while leaving
+ * one slot to skip a draft. */
 #define GITHUB_API_URL_LIST "https://api.github.com/repos/%s/%s/releases?per_page=2"
-/* Initial response buffer; grows dynamically as data arrives. The GitHub
- * /releases/latest payload is ~8KB and grows with asset count and release
- * notes length, so a fixed buffer truncated the JSON and broke parsing. */
-#define GITHUB_API_INITIAL_BUFFER_SIZE 8192
-#define GITHUB_API_MAX_BUFFER_SIZE     (64 * 1024)
 
 static char s_latest_version[32] = {0};
 static char s_download_url[512] = {0};
@@ -77,92 +69,28 @@ static volatile int s_download_progress = 0;  /* 0-100 */
 static volatile int s_download_total = 0;
 static volatile int s_download_received = 0;
 
+/* Per-check state handed to the HTTP event handler. */
+typedef struct {
+    release_scan_t scan;
+    int bytes;
+} release_check_ctx_t;
+
 /**
- * @brief HTTP event handler for GitHub API request
- * 
- * Note: GitHub API uses chunked transfer encoding, so we must handle
- * both chunked and non-chunked responses.
+ * @brief HTTP event handler for the GitHub API request
+ *
+ * Feeds each body chunk straight into the release scanner instead of
+ * buffering the whole response. Buffering it (9-18 KB) and then parsing it
+ * with cJSON needed several times that in free heap on top of the TLS
+ * session, which a unit running BACnet, MQTT and ten sensors no longer had.
+ * esp_http_client has already removed any chunked transfer encoding.
  */
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 {
-    static char *output_buffer = NULL;
-    static int output_len = 0;
-    static int output_cap = 0;
-    
-    switch (evt->event_id) {
-    case HTTP_EVENT_ON_DATA:
-        /* Handle both chunked and non-chunked responses */
-        if (output_buffer == NULL) {
-            output_cap = GITHUB_API_INITIAL_BUFFER_SIZE;
-            output_buffer = (char *)malloc(output_cap);
-            output_len = 0;
-            if (output_buffer == NULL) {
-                ESP_LOGE(TAG, "Failed to allocate memory for output buffer");
-                output_cap = 0;
-                return ESP_FAIL;
-            }
-        }
-        /* Grow the buffer as needed (reserve 1 byte for the null terminator) */
-        if (output_len + evt->data_len + 1 > output_cap) {
-            int new_cap = output_cap;
-            while (output_len + evt->data_len + 1 > new_cap &&
-                   new_cap < GITHUB_API_MAX_BUFFER_SIZE) {
-                new_cap *= 2;
-            }
-            if (new_cap > GITHUB_API_MAX_BUFFER_SIZE) {
-                new_cap = GITHUB_API_MAX_BUFFER_SIZE;
-            }
-            if (new_cap != output_cap) {
-                char *grown = (char *)realloc(output_buffer, new_cap);
-                if (grown == NULL) {
-                    ESP_LOGE(TAG, "Failed to grow output buffer to %d bytes", new_cap);
-                    free(output_buffer);
-                    output_buffer = NULL;
-                    output_len = 0;
-                    output_cap = 0;
-                    return ESP_FAIL;
-                }
-                output_buffer = grown;
-                output_cap = new_cap;
-            }
-        }
-        /* Append data if there's room (leave space for null terminator) */
-        if (output_len + evt->data_len + 1 <= output_cap) {
-            memcpy(output_buffer + output_len, evt->data, evt->data_len);
-            output_len += evt->data_len;
-        } else {
-            /* Only reachable if the response exceeds GITHUB_API_MAX_BUFFER_SIZE */
-            ESP_LOGW(TAG, "Response exceeds max buffer (%d bytes), truncating",
-                     GITHUB_API_MAX_BUFFER_SIZE);
-        }
-        break;
-        
-    case HTTP_EVENT_ON_FINISH:
-        if (output_buffer != NULL) {
-            output_buffer[output_len] = '\0';
-            /* Store the buffer pointer in user_data for later use */
-            if (evt->user_data) {
-                *((char **)evt->user_data) = output_buffer;
-            }
-            output_buffer = NULL;
-            output_len = 0;
-            output_cap = 0;
-        }
-        break;
-        
-    case HTTP_EVENT_DISCONNECTED:
-    case HTTP_EVENT_ERROR:
-        /* Clean up on disconnect or error to prevent memory leaks */
-        if (output_buffer != NULL) {
-            free(output_buffer);
-            output_buffer = NULL;
-            output_len = 0;
-            output_cap = 0;
-        }
-        break;
-        
-    default:
-        break;
+    release_check_ctx_t *ctx = (release_check_ctx_t *)evt->user_data;
+    if (evt->event_id == HTTP_EVENT_ON_DATA && ctx != NULL &&
+        esp_http_client_get_status_code(evt->client) == 200) {
+        release_scan_feed(&ctx->scan, (const char *)evt->data, evt->data_len);
+        ctx->bytes += evt->data_len;
     }
     return ESP_OK;
 }
@@ -198,6 +126,20 @@ bool ota_updater_get_include_prerelease(void)
     return s_include_prerelease;
 }
 
+/* Held for each GitHub check attempt and for the whole firmware download, so
+ * the two never run TLS sessions side by side: the 60 s boot check starting
+ * during a download left ~6 KB of heap, which stalled the download and made
+ * the check fail with out-of-memory. */
+static SemaphoreHandle_t github_lock(void)
+{
+    static StaticSemaphore_t buf;
+    static SemaphoreHandle_t lock = NULL;
+    if (lock == NULL) {
+        lock = xSemaphoreCreateMutexStatic(&buf);
+    }
+    return lock;
+}
+
 /* Retry configuration */
 #define OTA_CHECK_MAX_RETRIES   3
 #define OTA_CHECK_RETRY_DELAY_MS 2000
@@ -217,8 +159,6 @@ static esp_err_t ota_check_for_update_internal(void)
         snprintf(url, sizeof(url), GITHUB_API_URL_LATEST, CONFIG_GITHUB_OWNER, CONFIG_GITHUB_REPO);
     }
     ESP_LOGD(TAG, "API URL: %s", url);
-    
-    char *response_buffer = NULL;
 
     /* Build the result in locals and publish it only if the whole check
      * succeeds, so a check in flight (or a failed one) never hides an update
@@ -228,174 +168,88 @@ static esp_err_t ota_check_for_update_internal(void)
     char dl_url[sizeof(s_download_url)] = {0};
     bool available = false;
     bool is_prerelease = false;
-    
+
+    release_check_ctx_t *ctx = malloc(sizeof(*ctx));
+    if (ctx == NULL) {
+        ESP_LOGE(TAG, "Out of memory for update check");
+        return ESP_ERR_NO_MEM;
+    }
+    /* Releases also ship bootloader.bin and partition-table.bin, which must
+     * NOT be flashed as the app: doing so corrupts the OTA slot and forces a
+     * bootloader fallback to the factory image. The scanner prefers the exact
+     * app asset "<repo>.bin" and otherwise falls back to any other .bin. */
+    char expected_app[64];
+    snprintf(expected_app, sizeof(expected_app), "%s.bin", CONFIG_GITHUB_REPO);
+    release_scan_init(&ctx->scan, expected_app);
+    ctx->bytes = 0;
+
     esp_http_client_config_t config = {
         .url = url,
         .event_handler = http_event_handler,
-        .user_data = &response_buffer,
+        .user_data = ctx,
         .timeout_ms = 10000,
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
-    
-    /* Add User-Agent header (required by GitHub API) */
+
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == NULL) {
         ESP_LOGE(TAG, "Failed to initialize HTTP client");
+        free(ctx);
         return ESP_FAIL;
     }
-    
+
+    /* User-Agent is required by the GitHub API */
     esp_http_client_set_header(client, "User-Agent", "ESP32-OTA-Updater");
     esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
-    
+
     ESP_LOGD(TAG, "Sending request to GitHub API...");
     esp_err_t err = esp_http_client_perform(client);
-    
+
     if (err == ESP_OK) {
         int status = esp_http_client_get_status_code(client);
-        int content_len = esp_http_client_get_content_length(client);
-        ESP_LOGD(TAG, "HTTP response: status=%d, content_length=%d", status, content_len);
-        
-        if (status == 200 && response_buffer != NULL) {
-            /* Parse JSON response */
-            cJSON *root = cJSON_Parse(response_buffer);
-            if (root != NULL) {
-                /* In pre-release/beta mode, the response is an array of
-                 * releases (newest first). Pick the first non-draft entry
-                 * (prereleases are fine - that's the whole point). In
-                 * stable mode, the response is already a single release
-                 * object (drafts/prereleases already excluded by GitHub). */
-                cJSON *release = root;
-                if (cJSON_IsArray(root)) {
-                    release = NULL;
-                    int count = cJSON_GetArraySize(root);
-                    for (int i = 0; i < count; i++) {
-                        cJSON *candidate = cJSON_GetArrayItem(root, i);
-                        cJSON *draft = cJSON_GetObjectItem(candidate, "draft");
-                        if (cJSON_IsTrue(draft)) {
-                            continue;
-                        }
-                        release = candidate;
-                        break;
-                    }
-                    if (release == NULL) {
-                        ESP_LOGW(TAG, "No non-draft releases found");
-                    }
-                }
+        ESP_LOGD(TAG, "HTTP response: status=%d, %d bytes", status, ctx->bytes);
 
-                cJSON *tag_name = release ? cJSON_GetObjectItem(release, "tag_name") : NULL;
-                cJSON *assets = release ? cJSON_GetObjectItem(release, "assets") : NULL;
-                cJSON *prerelease = release ? cJSON_GetObjectItem(release, "prerelease") : NULL;
-
-                /* Record whether the selected release is a GitHub pre-release
-                 * (beta) so the UI can label it clearly. In stable mode this
-                 * is always false (GitHub's /releases/latest never returns a
-                 * pre-release); in beta mode it reflects the picked release. */
-                is_prerelease = cJSON_IsTrue(prerelease);
-
-                if (cJSON_IsString(tag_name)) {
-                    strncpy(latest, tag_name->valuestring, sizeof(latest) - 1);
-                    ESP_LOGD(TAG, "Latest version: %s", latest);
-                    
-                    /* Compare versions */
-                    if (version_compare(latest, APP_VERSION) > 0) {
-                        available = true;
-                        ESP_LOGI(TAG, "Update available: %s -> %s", APP_VERSION, latest);
-                        
-                        /* Find the application firmware binary among the release
-                         * assets. Releases also ship bootloader.bin and
-                         * partition-table.bin, which must NOT be flashed as the
-                         * app: doing so corrupts the OTA slot and forces a
-                         * bootloader fallback to the factory image. Prefer the
-                         * exact app asset "<repo>.bin"; fall back to any .bin
-                         * that is not the bootloader or partition table. */
-                        dl_url[0] = '\0';
-                        char expected_app[64];
-                        snprintf(expected_app, sizeof(expected_app), "%s.bin", CONFIG_GITHUB_REPO);
-                        if (cJSON_IsArray(assets)) {
-                            int asset_count = cJSON_GetArraySize(assets);
-                            const char *fallback_url = NULL;
-                            for (int i = 0; i < asset_count; i++) {
-                                cJSON *asset = cJSON_GetArrayItem(assets, i);
-                                cJSON *name = cJSON_GetObjectItem(asset, "name");
-                                cJSON *browser_url = cJSON_GetObjectItem(asset, "browser_download_url");
-                                
-                                if (!cJSON_IsString(name) || !cJSON_IsString(browser_url)) {
-                                    continue;
-                                }
-                                const char *nm = name->valuestring;
-                                
-                                /* Skip non-application binaries */
-                                if (strcmp(nm, "bootloader.bin") == 0 ||
-                                    strcmp(nm, "partition-table.bin") == 0) {
-                                    continue;
-                                }
-                                /* Only consider files ending in ".bin" */
-                                const char *dot = strrchr(nm, '.');
-                                if (dot == NULL || strcmp(dot, ".bin") != 0) {
-                                    continue;
-                                }
-                                
-                                if (strcmp(nm, expected_app) == 0) {
-                                    /* Exact match on the app binary — use it */
-                                    strncpy(dl_url, browser_url->valuestring,
-                                            sizeof(dl_url) - 1);
-                                    dl_url[sizeof(dl_url) - 1] = '\0';
-                                    ESP_LOGD(TAG, "Firmware URL: %s", dl_url);
-                                    fallback_url = NULL;
-                                    break;
-                                }
-                                /* Remember the first plausible app .bin as a fallback */
-                                if (fallback_url == NULL) {
-                                    fallback_url = browser_url->valuestring;
-                                }
-                            }
-                            if (dl_url[0] == '\0' && fallback_url != NULL) {
-                                strncpy(dl_url, fallback_url, sizeof(dl_url) - 1);
-                                dl_url[sizeof(dl_url) - 1] = '\0';
-                                ESP_LOGW(TAG, "App asset '%s' not found; using fallback: %s",
-                                         expected_app, dl_url);
-                            }
-                            if (dl_url[0] == '\0') {
-                                ESP_LOGE(TAG, "No suitable firmware .bin asset found in release");
-                                available = false;
-                            }
-                        }
-                    } else {
-                        ESP_LOGD(TAG, "Already up to date");
-                    }
-                } else {
-                    /* No usable tag_name - treat as a failed check so the
-                     * retry logic in ota_check_for_update() kicks in instead
-                     * of silently reporting success with an empty/"unknown"
-                     * version. This was previously left as ESP_OK, which
-                     * meant a transient hiccup (e.g. all-draft releases,
-                     * unexpected response shape) permanently stuck the UI
-                     * on "unknown" until the user tried again by hand. */
-                    ESP_LOGW(TAG, "No usable release found (tag_name missing)");
-                    err = ESP_FAIL;
-                }
-                cJSON_Delete(root);
-            } else {
-                /* Same reasoning as above: a JSON parse failure (e.g. a
-                 * truncated/partial response) must not be treated as a
-                 * successful check. */
-                ESP_LOGE(TAG, "Failed to parse JSON response");
-                err = ESP_FAIL;
-            }
-        } else if (status == 200 && response_buffer == NULL) {
-            ESP_LOGE(TAG, "HTTP 200 but no response data received");
-            err = ESP_FAIL;
-        } else {
+        if (status != 200) {
             ESP_LOGE(TAG, "GitHub API returned status %d", status);
             err = ESP_FAIL;
+        } else if (ctx->bytes == 0) {
+            ESP_LOGE(TAG, "HTTP 200 but no response data received");
+            err = ESP_FAIL;
+        } else if (!release_scan_finish(&ctx->scan)) {
+            /* Malformed or truncated JSON, or no non-draft release. Fail so
+             * the retry logic in ota_check_for_update() kicks in instead of
+             * reporting success with an empty/"unknown" version. */
+            ESP_LOGW(TAG, "No usable release in GitHub response (%d bytes)", ctx->bytes);
+            err = ESP_FAIL;
+        } else {
+            strncpy(latest, ctx->scan.tag, sizeof(latest) - 1);
+            /* Lets the UI label a beta clearly. Always false in stable mode:
+             * /releases/latest never returns a pre-release. */
+            is_prerelease = ctx->scan.prerelease;
+            ESP_LOGD(TAG, "Latest version: %s", latest);
+
+            if (version_compare(latest, APP_VERSION) > 0) {
+                if (ctx->scan.url[0] != '\0') {
+                    available = true;
+                    strncpy(dl_url, ctx->scan.url, sizeof(dl_url) - 1);
+                    if (!ctx->scan.url_is_exact) {
+                        ESP_LOGW(TAG, "App asset '%s' not found; using fallback: %s",
+                                 expected_app, dl_url);
+                    }
+                    ESP_LOGI(TAG, "Update available: %s -> %s", APP_VERSION, latest);
+                    ESP_LOGD(TAG, "Firmware URL: %s", dl_url);
+                } else {
+                    ESP_LOGE(TAG, "No suitable firmware .bin asset found in release %s", latest);
+                }
+            } else {
+                ESP_LOGD(TAG, "Already up to date");
+            }
         }
     } else {
         ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
     }
-    
-    if (response_buffer) {
-        free(response_buffer);
-    }
+
+    free(ctx);
 
     if (err == ESP_OK && s_update_state != OTA_UPDATE_DOWNLOADING) {
         memcpy(s_latest_version, latest, sizeof(s_latest_version));
@@ -403,7 +257,7 @@ static esp_err_t ota_check_for_update_internal(void)
         s_latest_is_prerelease = is_prerelease;
         s_update_available = available;
     }
-    
+
     esp_http_client_cleanup(client);
     return err;
 }
@@ -419,8 +273,22 @@ esp_err_t ota_check_for_update(void)
     int retry_delay_ms = OTA_CHECK_RETRY_DELAY_MS;
     
     for (int attempt = 1; attempt <= OTA_CHECK_MAX_RETRIES; attempt++) {
+        if (s_update_state == OTA_UPDATE_DOWNLOADING) {
+            ESP_LOGI(TAG, "Skipping update check: firmware download in progress");
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (xSemaphoreTake(github_lock(), pdMS_TO_TICKS(30000)) != pdTRUE) {
+            ESP_LOGW(TAG, "Skipping update check: GitHub connection busy");
+            return ESP_ERR_TIMEOUT;
+        }
+        if (s_update_state == OTA_UPDATE_DOWNLOADING) {
+            xSemaphoreGive(github_lock());
+            ESP_LOGI(TAG, "Skipping update check: firmware download in progress");
+            return ESP_ERR_INVALID_STATE;
+        }
         err = ota_check_for_update_internal();
-        
+        xSemaphoreGive(github_lock());
+
         if (err == ESP_OK) {
             break;  /* Success */
         }
@@ -528,34 +396,50 @@ static void ota_update_task(void *pvParameters)
         vTaskDelete(NULL);
         return;
     }
-    ESP_LOGI(TAG, "Starting OTA update from: %s", s_download_url);
+    ESP_LOGI(TAG, "Starting OTA update from: %s (free heap %u, largest block %u)", s_download_url,
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     
     s_update_state = OTA_UPDATE_DOWNLOADING;
     s_download_progress = 0;
     s_download_total = 0;
     s_download_received = 0;
+
+    /* Wait for an update check that is mid-request; new ones now skip. */
+    if (xSemaphoreTake(github_lock(), pdMS_TO_TICKS(60000)) != pdTRUE) {
+        ESP_LOGE(TAG, "OTA update aborted: update check did not finish");
+        s_update_state = OTA_UPDATE_FAILED;
+        vTaskDelete(NULL);
+        return;
+    }
     
+    /* Heap is tight on a busy unit (BACnet + MQTT + many sensors), and the
+     * TLS handshake with GitHub's download host verifies an RSA-4096 root,
+     * which needs several KB of working memory on top of the TLS buffers.
+     * So: one streamed GET (partial/range downloads opened a new TLS session
+     * for every 64 KB, ~20 handshakes per image), and 4 KB buffers, since
+     * esp_https_ota allocates a second buffer of the same size. */
     esp_http_client_config_t config = {
         .url = s_download_url,
         .timeout_ms = 60000,
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .buffer_size = 8192,      /* 8KB receive buffer for efficient reads */
+        .buffer_size = 4096,
         .buffer_size_tx = 1024,
-        .keep_alive_enable = true,
     };
-    
+
     esp_https_ota_config_t ota_config = {
         .http_config = &config,
-        .partial_http_download = true,
-        .max_http_request_size = 64 * 1024,  /* 64KB chunks — balances speed with progress granularity */
     };
-    
+
     esp_https_ota_handle_t ota_handle = NULL;
     ESP_LOGD(TAG, "Connecting to GitHub...");
     esp_err_t err = esp_https_ota_begin(&ota_config, &ota_handle);
-    
+
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "OTA begin failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "OTA begin failed: %s (free heap %u, largest block %u)",
+                 esp_err_to_name(err), (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        xSemaphoreGive(github_lock());
         s_update_state = OTA_UPDATE_FAILED;
         vTaskDelete(NULL);
         return;
@@ -593,8 +477,11 @@ static void ota_update_task(void *pvParameters)
     }
     
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "OTA perform failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "OTA perform failed: %s (free heap %u, largest block %u)",
+                 esp_err_to_name(err), (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         esp_https_ota_abort(ota_handle);
+        xSemaphoreGive(github_lock());
         s_update_state = OTA_UPDATE_FAILED;
         vTaskDelete(NULL);
         return;
@@ -604,6 +491,7 @@ static void ota_update_task(void *pvParameters)
     if (esp_https_ota_is_complete_data_received(ota_handle) != true) {
         ESP_LOGE(TAG, "Complete data was not received");
         esp_https_ota_abort(ota_handle);
+        xSemaphoreGive(github_lock());
         s_update_state = OTA_UPDATE_FAILED;
         vTaskDelete(NULL);
         return;
@@ -619,6 +507,7 @@ static void ota_update_task(void *pvParameters)
         esp_restart();
     } else {
         ESP_LOGE(TAG, "OTA finish failed: %s", esp_err_to_name(err));
+        xSemaphoreGive(github_lock());
         s_update_state = OTA_UPDATE_FAILED;
     }
     

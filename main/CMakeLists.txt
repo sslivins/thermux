@@ -50,6 +50,7 @@ idf_component_register(
         "modbus_map.c"
         "modbus_server.c"
         "bacnet_map.c"
+        "release_scan.c"
         "bacnet_server.c"
     INCLUDE_DIRS "."
     REQUIRES 

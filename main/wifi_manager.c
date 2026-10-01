@@ -22,6 +22,10 @@ static bool s_scanning = false;  /* Flag to prevent auto-connect during scan */
 static char s_ip_addr[16] = {0};
 static int s_retry_num = 0;
 static EventGroupHandle_t s_wifi_event_group;
+static bool s_driver_ready = false;  /* esp_wifi_init() done, netif created */
+static bool s_started = false;       /* started by wifi_manager_start() */
+static esp_event_handler_instance_t s_wifi_evt_inst;
+static esp_event_handler_instance_t s_ip_evt_inst;
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
@@ -53,31 +57,68 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
+/*
+ * The WiFi driver is brought up on first use rather than at boot. On an
+ * Ethernet unit nothing starts WiFi; it is only used for the settings page's
+ * network scan. An initialised but idle driver still held ~20 KB of heap
+ * (static RX buffers and driver state), and that is the margin the OTA
+ * download's TLS session needs on a busy unit.
+ */
 esp_err_t wifi_manager_init(void)
 {
+    s_wifi_event_group = xEventGroupCreate();
+    return s_wifi_event_group ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static void driver_down(void)
+{
+    if (!s_driver_ready) {
+        return;
+    }
+    esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_wifi_evt_inst);
+    esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, s_ip_evt_inst);
+    esp_wifi_deinit();
+    esp_netif_destroy_default_wifi(s_wifi_netif);
+    s_wifi_netif = NULL;
+    s_driver_ready = false;
+    ESP_LOGD(TAG, "WiFi driver released");
+}
+
+static esp_err_t driver_up(void)
+{
+    if (s_driver_ready) {
+        return ESP_OK;
+    }
     ESP_LOGD(TAG, "Initializing WiFi");
 
-    s_wifi_event_group = xEventGroupCreate();
-
     s_wifi_netif = esp_netif_create_default_wifi_sta();
-    ESP_ERROR_CHECK(esp_netif_set_hostname(s_wifi_netif, CONFIG_MDNS_HOSTNAME));
+    if (s_wifi_netif == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    esp_netif_set_hostname(s_wifi_netif, CONFIG_MDNS_HOSTNAME);
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    esp_err_t err = esp_wifi_init(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
+        esp_netif_destroy_default_wifi(s_wifi_netif);
+        s_wifi_netif = NULL;
+        return err;
+    }
+    s_driver_ready = true;
 
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                                &wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                                &wifi_event_handler, NULL));
+    err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                              &wifi_event_handler, NULL, &s_wifi_evt_inst);
+    if (err == ESP_OK) {
+        err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                                  &wifi_event_handler, NULL, &s_ip_evt_inst);
+    }
 
     /* Try to load saved credentials, otherwise use menuconfig defaults */
     char ssid[32] = {0};
     char password[64] = {0};
-    
-    esp_err_t err = nvs_storage_load_wifi_config(ssid, sizeof(ssid), 
-                                                  password, sizeof(password));
-    if (err != ESP_OK || strlen(ssid) == 0) {
-        /* Use menuconfig defaults */
+    if (nvs_storage_load_wifi_config(ssid, sizeof(ssid), password, sizeof(password)) != ESP_OK ||
+        strlen(ssid) == 0) {
         strncpy(ssid, CONFIG_WIFI_SSID, sizeof(ssid) - 1);
         strncpy(password, CONFIG_WIFI_PASSWORD, sizeof(password) - 1);
     }
@@ -91,8 +132,17 @@ esp_err_t wifi_manager_init(void)
     strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
     strncpy((char *)wifi_config.sta.password, password, sizeof(wifi_config.sta.password) - 1);
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    if (err == ESP_OK) {
+        err = esp_wifi_set_mode(WIFI_MODE_STA);
+    }
+    if (err == ESP_OK) {
+        err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi setup failed: %s", esp_err_to_name(err));
+        driver_down();
+        return err;
+    }
 
     ESP_LOGD(TAG, "WiFi initialization complete");
     return ESP_OK;
@@ -101,12 +151,24 @@ esp_err_t wifi_manager_init(void)
 esp_err_t wifi_manager_start(void)
 {
     ESP_LOGD(TAG, "Starting WiFi");
+    esp_err_t err = driver_up();
+    if (err != ESP_OK) {
+        return err;
+    }
     s_retry_num = 0;
-    return esp_wifi_start();
+    err = esp_wifi_start();
+    if (err == ESP_OK) {
+        s_started = true;
+    }
+    return err;
 }
 
 esp_err_t wifi_manager_stop(void)
 {
+    if (!s_driver_ready) {
+        return ESP_OK;
+    }
+    s_started = false;
     return esp_wifi_stop();
 }
 
@@ -137,7 +199,10 @@ esp_err_t wifi_manager_set_credentials(const char *ssid, const char *password)
     strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
     strncpy((char *)wifi_config.sta.password, password, sizeof(wifi_config.sta.password) - 1);
 
-    esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    /* Not initialised yet: driver_up() reads the saved credentials */
+    if (s_driver_ready) {
+        esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    }
 
     ESP_LOGI(TAG, "WiFi credentials updated");
     return ESP_OK;
@@ -146,30 +211,30 @@ esp_err_t wifi_manager_set_credentials(const char *ssid, const char *password)
 esp_err_t wifi_manager_scan(wifi_ap_record_t *ap_records, uint16_t max_records, uint16_t *found_count)
 {
     ESP_LOGD(TAG, "Starting WiFi scan...");
-    
+
     /* Set scanning flag to prevent auto-connect in event handler */
     s_scanning = true;
-    
-    /* Check if WiFi is started, if not start it temporarily */
-    wifi_mode_t mode;
-    bool was_stopped = false;
-    esp_err_t err = esp_wifi_get_mode(&mode);
-    if (err == ESP_ERR_WIFI_NOT_INIT) {
-        ESP_LOGE(TAG, "WiFi not initialized");
+
+    /* Bring the driver up (and start it) just for the scan if WiFi isn't in
+     * use, and give the memory back afterwards. */
+    bool brought_up = !s_driver_ready;
+    esp_err_t err = driver_up();
+    if (err != ESP_OK) {
         s_scanning = false;
         return err;
     }
-    
-    /* Try to start WiFi if not running (needed for scan) */
-    err = esp_wifi_start();
-    if (err == ESP_OK) {
-        was_stopped = true;
+    bool started_here = !s_started;
+    if (started_here) {
+        err = esp_wifi_start();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "WiFi start for scan failed: %s", esp_err_to_name(err));
+            goto done;
+        }
         ESP_LOGD(TAG, "WiFi started temporarily for scan");
     }
-    
+
     vTaskDelay(pdMS_TO_TICKS(100)); /* Brief delay for WiFi to stabilize */
-    
-    /* Configure scan */
+
     wifi_scan_config_t scan_config = {
         .ssid = NULL,
         .bssid = NULL,
@@ -179,44 +244,36 @@ esp_err_t wifi_manager_scan(wifi_ap_record_t *ap_records, uint16_t max_records, 
         .scan_time.active.min = 100,
         .scan_time.active.max = 300,
     };
-    
+
     /* Start blocking scan */
     err = esp_wifi_scan_start(&scan_config, true);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "WiFi scan failed to start: %s", esp_err_to_name(err));
-        if (was_stopped) {
-            esp_wifi_stop();
-        }
-        s_scanning = false;
-        return err;
+        goto done;
     }
-    
-    /* Get scan results */
+
     uint16_t ap_count = 0;
     esp_wifi_scan_get_ap_num(&ap_count);
     ESP_LOGD(TAG, "WiFi scan found %d networks", ap_count);
-    
     if (ap_count > max_records) {
         ap_count = max_records;
     }
-    
+
     err = esp_wifi_scan_get_ap_records(&ap_count, ap_records);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to get scan results: %s", esp_err_to_name(err));
-        if (was_stopped) {
-            esp_wifi_stop();
-        }
-        s_scanning = false;
-        return err;
+        goto done;
     }
-    
-    /* Stop WiFi if we started it just for the scan */
-    if (was_stopped) {
+    *found_count = ap_count;
+
+done:
+    if (started_here) {
         esp_wifi_stop();
         ESP_LOGD(TAG, "WiFi stopped after scan");
     }
-    
+    if (brought_up) {
+        driver_down();
+    }
     s_scanning = false;
-    *found_count = ap_count;
-    return ESP_OK;
+    return err;
 }

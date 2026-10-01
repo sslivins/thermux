@@ -14,6 +14,7 @@ extern void run_nvs_tests(void);
 extern void run_bus_stats_tests(void);
 extern void run_modbus_map_tests(void);
 extern void run_bacnet_map_tests(void);
+extern void run_release_scan_tests(void);
 
 int main(void)
 {
@@ -42,6 +43,9 @@ int main(void)
 
     printf("\n[BACnet Map Tests]\n");
     run_bacnet_map_tests();
+
+    printf("\n[Release Scan Tests]\n");
+    run_release_scan_tests();
     
     UNITY_END();
     

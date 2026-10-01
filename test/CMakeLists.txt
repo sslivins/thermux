@@ -21,11 +21,13 @@ add_executable(test_runner
     test_bus_stats.c
     test_modbus_map.c
     test_bacnet_map.c
+    test_release_scan.c
     # Modules under test (test-only utilities are local, version_utils is shared)
     ../main/version_utils.c
     ../main/bus_stats.c
     ../main/modbus_map.c
     ../main/bacnet_map.c
+    ../main/release_scan.c
     mqtt_utils.c
     config_utils.c
     nvs_utils.c
@@ -36,6 +38,8 @@ target_include_directories(test_runner PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../main
     ${CMAKE_CURRENT_SOURCE_DIR}/unity/src
 )
+
+target_compile_definitions(test_runner PRIVATE FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 target_link_libraries(test_runner unity m)
 
