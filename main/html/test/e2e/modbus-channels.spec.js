@@ -4,7 +4,8 @@ const { startMockServer } = require('../mock-server');
 const { answerConfirm } = require('./confirm-helpers');
 
 /**
- * Browser-level tests for the Modbus channel table: it lists assigned channels,
+ * Browser-level tests for the shared Sensor Channels table (used by both Modbus
+ * TCP and BACnet/IP): it lists assigned channels,
  * edits a channel number inline (pencil -> input, Enter/Escape), moves with a
  * swap confirmation when the target is used, and only offers Release for
  * sensors that are no longer connected.
@@ -17,7 +18,7 @@ function channel(n, address, extra = {}) {
     };
 }
 
-test.describe('Modbus channel table', () => {
+test.describe('Sensor channel table', () => {
     /** @type {Awaited<ReturnType<typeof startMockServer>>} */
     let mock;
 
@@ -26,7 +27,7 @@ test.describe('Modbus channel table', () => {
     });
 
     function row(page, n) {
-        return page.locator(`#modbus-channels tr[data-channel="${n}"]`);
+        return page.locator(`#sensor-channels tr[data-channel="${n}"]`);
     }
 
     async function editTo(page, n, value) {
@@ -123,10 +124,41 @@ test.describe('Modbus channel table', () => {
         await expect(row(page, 4)).toContainText('—');
     });
 
+    test('lives in its own section and shows the BACnet object for each channel', async ({ page }) => {
+        mock = await startMockServer();
+        mock.state.modbusChannels = [channel(0, '28FF000000000001'), channel(7, '28FF000000000002')];
+        await page.goto(`${mock.baseURL}/config`);
+
+        await expect(page.locator('#panel-channels #sensor-channels table')).toHaveCount(1);
+        await expect(page.locator('#panel-modbus #sensor-channels')).toHaveCount(0);
+        await expect(page.locator('#sensor-channels thead')).toContainText('BACnet object');
+        await expect(row(page, 0)).toContainText('AI 0');
+        await expect(row(page, 7)).toContainText('AI 7');
+        await expect(row(page, 7)).toContainText('107');
+        await expect(page.locator('#channels-info')).toHaveText('Channels in use: 2 of 100');
+    });
+
+    test('warns when sensors have no channel', async ({ page }) => {
+        mock = await startMockServer();
+        mock.state.modbusChannels = [channel(0, '28FF000000000001')];
+        mock.state.sensorsWithoutChannel = 2;
+        await page.goto(`${mock.baseURL}/config`);
+
+        await expect(page.locator('#channels-info')).toContainText('2 sensor(s) have no channel');
+    });
+
+    test('Modbus and BACnet panels link to the channel section', async ({ page }) => {
+        mock = await startMockServer();
+        await page.goto(`${mock.baseURL}/config`);
+
+        await expect(page.locator('#panel-modbus a[href="#panel-channels"]')).toHaveCount(1);
+        await expect(page.locator('#panel-bacnet a[href="#panel-channels"]')).toHaveCount(1);
+    });
+
     test('shows a message when no channels are assigned', async ({ page }) => {
         mock = await startMockServer();
         await page.goto(`${mock.baseURL}/config`);
-        await expect(page.locator('#modbus-channels')).toContainText('No sensors have a channel yet');
+        await expect(page.locator('#sensor-channels')).toContainText('No sensors have a channel yet');
     });
 
     test('Release is only offered for missing sensors', async ({ page }) => {

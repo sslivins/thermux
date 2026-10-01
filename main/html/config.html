@@ -90,6 +90,11 @@
         .form-group input::-ms-reveal { filter: invert(1); }
         .form-group input::-webkit-credentials-auto-fill-button { filter: invert(1); }
         .form-hint { font-size: 0.8em; color: #888; margin-top: 5px; }
+        .form-hint a { color: #60a5fa; text-decoration: none; }
+        .form-hint a:hover { text-decoration: underline; }
+        #channels-info { margin-top: 10px; }
+        /* Register and BACnet object follow from the channel number; drop them on phones so status and temperature fit */
+        @media (max-width: 600px) { .mb-channel-derived { display: none; } }
         .btn {
             padding: 12px 24px;
             border: none;
@@ -183,9 +188,7 @@
             .confirm-dialog-buttons .btn { width: 100%; }
         }
         .current-value { font-size: 0.85em; color: #888; margin-bottom: 8px; }
-        .mb-channels { margin-top: 20px; }
-        #modbus-channels { overflow-x: auto; }
-        .mb-channels h3 { font-size: 1em; color: #ccc; margin-bottom: 5px; }
+        #sensor-channels { overflow-x: auto; }
         .mb-channel-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9em; }
         .mb-channel-table th, .mb-channel-table td {
             padding: 6px 8px;
@@ -328,6 +331,7 @@
             <a href="#panel-network">🌐 Network</a>
             <a href="#panel-mqtt">🔗 MQTT</a>
             <a href="#panel-sensors">🌡️ Sensors</a>
+            <a href="#panel-channels">🔢 Channels</a>
             <a href="#panel-modbus">🔌 Modbus</a>
             <a href="#panel-bacnet">🏢 BACnet/IP</a>
             <a href="#panel-firmware">📦 Firmware</a>
@@ -426,6 +430,17 @@
             </form>
         </div>
 
+        <div class="config-section" id="panel-channels">
+            <div class="section-title">🔢 Sensor Channels</div>
+            <div class="form-hint">
+                Each sensor keeps a fixed channel number that Modbus TCP and BACnet/IP both use: channel N is input register 100+N in Modbus and Analog Input N in BACnet.
+                Because the number stays with the sensor, controllers keep reading the right sensor when sensors are added or the bus is rescanned.
+                Moving a sensor onto a used channel swaps the two. A channel can only be released once its sensor is disconnected.
+            </div>
+            <div class="current-value" id="channels-info">Loading...</div>
+            <div id="sensor-channels">Loading...</div>
+        </div>
+
         <div class="config-section" id="panel-modbus">
             <div class="section-title">
                 🔌 Modbus TCP
@@ -449,18 +464,10 @@
                     <input type="number" id="modbus-unit-id" min="1" max="247" placeholder="1">
                     <div class="form-hint">Requests addressed to another unit ID get error 0x0B (gateway target failed). Unit ID 0 is also accepted.</div>
                 </div>
+                <div class="form-hint" style="margin-bottom: 8px;">Channel N's temperature is in input register 100+N, in hundredths of a degree. Assign sensors to channels under <a href="#panel-channels">Sensor Channels</a>.</div>
                 <div class="current-value" id="modbus-info">Loading...</div>
                 <button type="submit" class="btn btn-primary">💾 Save Modbus Settings</button>
             </form>
-            <div class="mb-channels">
-                <h3>Sensor channels</h3>
-                <div class="form-hint">
-                    Each sensor keeps its channel, so register addresses don't change when sensors are added or the bus is rescanned.
-                    Channel N's temperature is in input register 100+N, in hundredths of a degree.
-                    Moving a sensor onto a used channel swaps the two. A channel can only be released once its sensor is disconnected.
-                </div>
-                <div id="modbus-channels">Loading...</div>
-            </div>
         </div>
 
         <div class="config-section" id="panel-bacnet">
@@ -474,7 +481,7 @@
                         <input type="checkbox" id="bacnet-enabled" style="width: auto;">
                         Enable BACnet/IP server
                     </label>
-                    <div class="form-hint">Read-only. Exposes each assigned sensor channel as a BACnet Analog Input. BACnet has no authentication, so only enable it on a trusted building-controls network.</div>
+                    <div class="form-hint">Read-only. Each sensor channel appears as an Analog Input with the same number, named after the sensor. Assign sensors to channels under <a href="#panel-channels">Sensor Channels</a>. BACnet has no authentication, so only enable it on a trusted building-controls network.</div>
                 </div>
                 <div class="form-group">
                     <label for="bacnet-port">UDP Port</label>
@@ -781,6 +788,7 @@
                 document.getElementById('publish-interval').value = sensor.publish_interval / 1000;
                 document.getElementById('resolution').value = sensor.resolution;
                 
+                await loadChannels();
                 await loadModbus();
                 await loadBacnet();
 
@@ -1255,15 +1263,12 @@
 
             const lines = [];
             if (mb.error) lines.push(mb.error);
-            lines.push(`Channels in use: ${mb.channels_assigned} of ${mb.channel_capacity}`);
-            if (mb.sensors_without_channel > 0) {
-                lines.push(`${mb.sensors_without_channel} sensor(s) have no channel because all channels are in use`);
-            }
             if (mb.running) {
                 lines.push(mb.last_request_age_s === null
                     ? 'No requests yet'
                     : `Requests served: ${mb.requests} (last ${formatAge(mb.last_request_age_s)})`);
             }
+            if (lines.length === 0) lines.push('Stopped');
             document.getElementById('modbus-info').textContent = lines.join(' · ');
         }
 
@@ -1275,7 +1280,6 @@
             } catch (err) {
                 document.getElementById('modbus-info').textContent = 'Could not load Modbus settings';
             }
-            await loadModbusChannels();
         }
 
 
@@ -1309,10 +1313,10 @@
             }
         }
 
-        let modbusChannels = [];
-        let modbusChannelCapacity = 100;
+        let sensorChannels = [];
+        let channelCapacity = 100;
 
-        const MB_CHANNEL_STATUS_LABELS = {
+        const CHANNEL_STATUS_LABELS = {
             ok: 'OK', missing: 'Missing', read_error: 'Read error', stale: 'Stale', unassigned: 'Unassigned',
         };
 
@@ -1378,7 +1382,7 @@
             const input = document.createElement('input');
             input.type = 'number';
             input.min = 0;
-            input.max = modbusChannelCapacity - 1;
+            input.max = channelCapacity - 1;
             input.value = s.channel;
             input.className = 'mb-channel-input';
             input.setAttribute('aria-label', `New channel for channel ${s.channel}`);
@@ -1386,7 +1390,7 @@
             const cancelBtn = iconButton('mb-channel-cancel', 'cancel', 'Cancel');
             const commit = async () => {
                 if (input.value !== '' && Number(input.value) === s.channel) { cancelChannelEdit(); return; }
-                const sent = await moveModbusChannel(s.channel, input.value);
+                const sent = await moveChannel(s.channel, input.value);
                 if (!sent && editingChannel && editingChannel.cell === cell) { input.focus(); input.select(); }
             };
             input.addEventListener('keydown', (e) => {
@@ -1400,32 +1404,43 @@
             input.select();
         }
 
-        function renderModbusChannels(data) {
+        function renderChannels(data) {
             editingChannel = null;
-            modbusChannels = data.channels || [];
-            modbusChannelCapacity = data.channel_capacity || 100;
-            const container = document.getElementById('modbus-channels');
+            sensorChannels = data.channels || [];
+            channelCapacity = data.channel_capacity || 100;
+            const info = [`Channels in use: ${sensorChannels.length} of ${channelCapacity}`];
+            if (data.sensors_without_channel > 0) {
+                info.push(`${data.sensors_without_channel} sensor(s) have no channel because all channels are in use`);
+            }
+            document.getElementById('channels-info').textContent = info.join(' · ');
+            const container = document.getElementById('sensor-channels');
             container.textContent = '';
-            if (modbusChannels.length === 0) {
+            if (sensorChannels.length === 0) {
                 container.textContent = 'No sensors have a channel yet. Channels are given out automatically when sensors are found.';
                 return;
             }
             const table = document.createElement('table');
             table.className = 'mb-channel-table';
             const head = table.createTHead().insertRow();
-            ['Channel', 'Register', 'Sensor', 'Status', 'Temp', ''].forEach((t) => {
+            ['Channel', 'Modbus register', 'BACnet object', 'Sensor', 'Status', 'Temp', ''].forEach((t, i) => {
                 const th = document.createElement('th');
                 th.textContent = t;
+                if (i === 1 || i === 2) th.className = 'mb-channel-derived';
                 head.appendChild(th);
             });
             const body = table.createTBody();
-            for (const s of modbusChannels) {
+            for (const s of sensorChannels) {
                 const row = body.insertRow();
                 row.dataset.channel = s.channel;
                 const channelCell = row.insertCell();
                 channelCell.className = 'mb-channel-cell';
                 showChannelView(channelCell, s);
-                row.insertCell().textContent = s.temp_register;
+                const regCell = row.insertCell();
+                regCell.className = 'mb-channel-derived';
+                regCell.textContent = s.temp_register;
+                const aiCell = row.insertCell();
+                aiCell.className = 'mb-channel-derived';
+                aiCell.textContent = `AI ${s.channel}`;
 
                 const sensorCell = row.insertCell();
                 sensorCell.appendChild(document.createTextNode(s.name || 'Unnamed sensor'));
@@ -1436,7 +1451,7 @@
 
                 const statusCell = row.insertCell();
                 statusCell.className = 'mb-channel-status ' + (s.status === 'ok' ? 'mb-channel-status-ok' : 'mb-channel-status-bad');
-                statusCell.textContent = MB_CHANNEL_STATUS_LABELS[s.status] || s.status;
+                statusCell.textContent = CHANNEL_STATUS_LABELS[s.status] || s.status;
 
                 row.insertCell().textContent = s.temperature === null || s.temperature === undefined
                     ? '—' : `${s.temperature.toFixed(2)}°C`;
@@ -1448,25 +1463,25 @@
                     releaseBtn.type = 'button';
                     releaseBtn.className = 'btn btn-danger mb-channel-release';
                     releaseBtn.textContent = 'Release';
-                    releaseBtn.addEventListener('click', () => releaseModbusChannel(s));
+                    releaseBtn.addEventListener('click', () => releaseChannel(s));
                     actions.appendChild(releaseBtn);
                 }
             }
             container.appendChild(table);
         }
 
-        async function loadModbusChannels() {
+        async function loadChannels() {
             try {
                 const resp = await fetch('/api/modbus/channels', {cache: 'no-store'});
                 if (checkAuthError(resp)) return;
-                if (resp.ok) renderModbusChannels(await resp.json());
-                else document.getElementById('modbus-channels').textContent = 'Could not load channels';
+                if (resp.ok) renderChannels(await resp.json());
+                else document.getElementById('sensor-channels').textContent = 'Could not load channels';
             } catch (err) {
-                document.getElementById('modbus-channels').textContent = 'Could not load channels';
+                document.getElementById('sensor-channels').textContent = 'Could not load channels';
             }
         }
 
-        async function postModbusChannelAction(body) {
+        async function postChannelAction(body) {
             try {
                 const resp = await fetch('/api/modbus/channels', {
                     method: 'POST',
@@ -1476,32 +1491,32 @@
                 if (checkAuthError(resp)) return;
                 const result = await resp.json().catch(() => ({}));
                 showToast(result.message || (resp.ok ? 'Done' : 'Channel change failed'), !resp.ok);
-                if (Array.isArray(result.channels)) renderModbusChannels(result);
-                else await loadModbusChannels();
+                if (Array.isArray(result.channels)) renderChannels(result);
+                else await loadChannels();
             } catch (err) { showToast('Error changing channels', true); }
         }
 
-        async function moveModbusChannel(from, value) {
+        async function moveChannel(from, value) {
             const to = value === '' ? NaN : Number(value);
-            const plan = planChannelMove(modbusChannels, from, to, modbusChannelCapacity);
+            const plan = planChannelMove(sensorChannels, from, to, channelCapacity);
             if (!plan.ok) { showToast(plan.error, true); return false; }
             if (plan.swapWith && !await confirmDialog({
                 title: 'Swap channels?',
                 message: `Channel ${to} is used by ${channelSensorLabel(plan.swapWith)}. The two sensors will trade channels.`,
                 confirmText: 'Swap sensors'
             })) return false;
-            await postModbusChannelAction({ action: 'move', from, to });
+            await postChannelAction({ action: 'move', from, to });
             return true;
         }
 
-        async function releaseModbusChannel(s) {
+        async function releaseChannel(s) {
             if (!await confirmDialog({
                 title: `Release channel ${s.channel}?`,
                 message: `${channelSensorLabel(s)} will lose this channel. Its registers will read as unassigned, and the channel can be given to the next new sensor. If the sensor comes back, it gets a new channel.`,
                 confirmText: 'Release channel',
                 danger: true
             })) return;
-            await postModbusChannelAction({ action: 'release', channel: s.channel });
+            await postChannelAction({ action: 'release', channel: s.channel });
         }
 
         document.getElementById('modbus-form').addEventListener('submit', async (e) => {

@@ -20,7 +20,7 @@ test.describe('Modbus TCP settings', () => {
         mock = await startMockServer();
         Object.assign(mock.state.modbus, {
             enabled: true, running: true, port: 1502, unit_id: 7,
-            channels_assigned: 12, requests: 40, last_request_age_s: 3,
+            requests: 40, last_request_age_s: 3,
         });
         await page.goto(`${mock.baseURL}/config`);
 
@@ -28,22 +28,13 @@ test.describe('Modbus TCP settings', () => {
         await expect(page.locator('#modbus-enabled')).toBeChecked();
         await expect(page.locator('#modbus-port')).toHaveValue('1502');
         await expect(page.locator('#modbus-unit-id')).toHaveValue('7');
-        await expect(page.locator('#modbus-info')).toContainText('Channels in use: 12 of 100');
         await expect(page.locator('#modbus-info')).toContainText('Requests served: 40');
-    });
-
-    test('warns when sensors have no channel', async ({ page }) => {
-        mock = await startMockServer();
-        Object.assign(mock.state.modbus, { channels_assigned: 100, sensors_without_channel: 2 });
-        await page.goto(`${mock.baseURL}/config`);
-
-        await expect(page.locator('#modbus-info')).toContainText('2 sensor(s) have no channel');
     });
 
     test('saving sends enabled, port and unit ID', async ({ page }) => {
         mock = await startMockServer();
         await page.goto(`${mock.baseURL}/config`);
-        await expect(page.locator('#modbus-info')).not.toContainText('Loading');
+        await expect(page.locator('#modbus-info')).not.toHaveText('Loading...');
 
         await page.locator('#modbus-enabled').check();
         await page.locator('#modbus-port').fill('5020');
@@ -60,7 +51,7 @@ test.describe('Modbus TCP settings', () => {
     test('an out-of-range unit ID is blocked without calling the device', async ({ page }) => {
         mock = await startMockServer();
         await page.goto(`${mock.baseURL}/config`);
-        await expect(page.locator('#modbus-info')).not.toContainText('Loading');
+        await expect(page.locator('#modbus-info')).not.toHaveText('Loading...');
 
         await page.locator('#modbus-unit-id').fill('248');
         await page.locator('#modbus-form button[type="submit"]').click();
@@ -75,7 +66,7 @@ test.describe('Modbus TCP settings', () => {
         mock = await startMockServer();
         mock.state.modbusFailMessage = 'Could not apply Modbus settings (ESP_FAIL); previous settings kept';
         await page.goto(`${mock.baseURL}/config`);
-        await expect(page.locator('#modbus-info')).not.toContainText('Loading');
+        await expect(page.locator('#modbus-info')).not.toHaveText('Loading...');
 
         await page.locator('#modbus-enabled').check();
         await page.locator('#modbus-form button[type="submit"]').click();

@@ -27,6 +27,7 @@ test.describe('Settings page quick-nav', () => {
             'panel-network',
             'panel-mqtt',
             'panel-sensors',
+            'panel-channels',
             'panel-modbus',
             'panel-bacnet',
             'panel-firmware',
