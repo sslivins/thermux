@@ -8,6 +8,7 @@ A multi-sensor temperature monitoring system for ESP32-POE boards with Home Assi
 - **Optimized Parallel Reads** - Uses 1-Wire skip ROM command to read all sensors simultaneously (~1050ms for 20 sensors in 12-bit mode, ~450ms in 9-bit)
 - **Home Assistant Integration** - MQTT auto-discovery for seamless integration
 - **Modbus TCP** - Optional read-only Modbus TCP server so PLCs and heat pump controllers can read temperatures directly (see [Modbus TCP](#modbus-tcp))
+- **BACnet/IP** - Optional read-only BACnet/IP server for building-automation systems (see [BACnet/IP](#bacnetip))
 - **Web Interface** - Configuration and monitoring via built-in web server
 - **Sensor Identification** - Change detection highlighting helps identify which physical sensor is which
 - **Custom Sensor Names** - Assign friendly names to sensors via web UI (persisted in NVS)
@@ -256,6 +257,60 @@ for channel, (raw, st) in enumerate(zip(temps, status)):
         celsius = (raw - 65536 if raw >= 32768 else raw) / 100
         print(f"channel {channel}: {celsius:.2f} °C")
 ```
+
+## BACnet/IP
+
+Thermux can also run a **read-only** BACnet/IP server, for building-automation systems that speak BACnet rather than Modbus. It's off by default: turn it on under **Settings → BACnet/IP**. Modbus and BACnet can run at the same time and serve the same sensor channels.
+
+| Setting | Default | Notes |
+|---------|---------|-------|
+| UDP port | 47808 (0xBAC0) | The standard BACnet/IP port. Can't be the web server's port |
+| Device instance | Derived from the Ethernet MAC | 0–4194302. Must be unique on the BACnet network, so set it by hand if your site has a numbering plan |
+| Device name | The hostname | Up to 63 characters |
+
+Like Modbus, BACnet has no password. Anyone on the network can read the objects, but nothing can be changed, so only enable it on a building-controls network you trust.
+
+### Objects
+
+The **Device** object reports vendor and model `Thermux`, the firmware version, and an object list.
+
+Each assigned [sensor channel](#sensor-channels) is an **Analog Input**, and the instance number is the channel number. AI 3 is always channel 3, which is Modbus register 103. Unassigned channels have no object, so the object list only shows channels with a sensor.
+
+| Property | Value |
+|----------|-------|
+| Object name | The sensor's friendly name, or `Channel N` if it has none. If two sensors have the same name, the second gets ` (N)` added, because BACnet object names must be unique |
+| Description | The sensor's ROM ID, for example `281491BA00000069` |
+| Present value | Temperature in °C. If a reading fails, the last good value stays and Reliability shows the fault |
+| Units | degrees-Celsius |
+| Reliability | `no-fault-detected` when OK; `no-sensor` when the sensor is missing; `communication-failure` on a read error; `unreliable-other` when the reading is stale |
+| Status flags | `fault` is set whenever Reliability isn't `no-fault-detected` |
+| COV increment | 0.1 °C |
+
+When sensors are added, removed or renamed, the object list changes and the device's Database Revision goes up, so clients that cache the object list know to read it again.
+
+### Services
+
+- Who-Is / I-Am and Who-Has / I-Have
+- ReadProperty and ReadPropertyMultiple
+- SubscribeCOV (confirmed and unconfirmed), up to 16 subscriptions at once. Thermux sends a notification whenever a temperature changes by 0.1 °C or more, or its status flags change.
+
+All write and management services (WriteProperty, CreateObject, ReinitializeDevice, DeviceCommunicationControl and so on) are rejected with `unrecognized-service`.
+
+If the device's IP address changes (a new DHCP lease, for example), Thermux notices within a few seconds and sends a new I-Am. You don't need to restart anything.
+
+### Example
+
+The repo includes `scripts/thermux_bacnet.py`, which needs [BAC0](https://github.com/ChristianTremblay/BAC0) 2025 or later (`pip install BAC0`):
+
+```bash
+python scripts/thermux_bacnet.py --discover                       # Who-Is on the local network
+python scripts/thermux_bacnet.py 192.168.1.50                     # device info and every Analog Input
+python scripts/thermux_bacnet.py 192.168.1.50 --cov 60            # watch COV notifications for a minute
+python scripts/thermux_bacnet.py 192.168.1.50 --try-write         # check that writes are rejected
+python scripts/thermux_bacnet.py 192.168.1.50 --port 47809        # non-standard port
+```
+
+Add `--local 192.168.1.32/24` (your PC's address) if the script picks the wrong network interface. Who-Is discovery only finds devices on port 47808. On another port, I-Am replies are broadcast to that port, so give the address and `--port` instead.
 
 ## OTA Updates
 

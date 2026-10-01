@@ -571,7 +571,9 @@ void modbus_server_get_channel_regs(uint16_t status[MODBUS_CHANNEL_COUNT],
                   xSemaphoreTake(s_life_lock, pdMS_TO_TICKS(LIFE_LOCK_TIMEOUT_MS)) == pdTRUE;
     memcpy(status, s_regs.status, sizeof(s_regs.status));
     memcpy(temp, s_regs.temp, sizeof(s_regs.temp));
-    memcpy(rom, s_regs.rom, sizeof(s_regs.rom));
+    if (rom != NULL) {
+        memcpy(rom, s_regs.rom, sizeof(s_regs.rom));
+    }
     if (locked) {
         xSemaphoreGive(s_life_lock);
     }

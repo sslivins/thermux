@@ -26,6 +26,7 @@
 #include "onewire_temp.h"
 #include "sensor_manager.h"
 #include "modbus_server.h"
+#include "bacnet_server.h"
 #include "mqtt_client_ha.h"
 #include "web_server.h"
 #include "ota_updater.h"
@@ -40,7 +41,7 @@ EventGroupHandle_t network_event_group;
 const int NETWORK_CONNECTED_BIT = BIT0;
 
 /* Application version - update for each release */
-const char *APP_VERSION = "3.4.3";
+const char *APP_VERSION = "3.5.0";
 
 /* Runtime sensor settings (can be changed via web UI) */
 static uint32_t s_read_interval_ms = CONFIG_SENSOR_READ_INTERVAL_MS;
@@ -166,6 +167,7 @@ static void temperature_task(void *pvParameters)
         /* Read all connected sensors */
         sensor_manager_read_all();
         modbus_server_update();
+        bacnet_server_update();
         
         vTaskDelay(pdMS_TO_TICKS(s_read_interval_ms));
     }
@@ -449,6 +451,7 @@ void app_main(void)
 
     /* Start the Modbus TCP server if enabled (failure is not fatal) */
     modbus_server_init();
+    bacnet_server_init();
 
 #if CONFIG_OTA_ENABLED
     /* Initialize OTA updater */

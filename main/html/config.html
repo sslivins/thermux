@@ -329,6 +329,7 @@
             <a href="#panel-mqtt">🔗 MQTT</a>
             <a href="#panel-sensors">🌡️ Sensors</a>
             <a href="#panel-modbus">🔌 Modbus</a>
+            <a href="#panel-bacnet">🏢 BACnet/IP</a>
             <a href="#panel-firmware">📦 Firmware</a>
             <a href="#panel-logs">📋 Logs</a>
             <a href="#panel-security">🔒 Security</a>
@@ -460,6 +461,39 @@
                 </div>
                 <div id="modbus-channels">Loading...</div>
             </div>
+        </div>
+
+        <div class="config-section" id="panel-bacnet">
+            <div class="section-title">
+                🏢 BACnet/IP
+                <span id="bacnet-status" class="status-badge status-disconnected">Off</span>
+            </div>
+            <form id="bacnet-form">
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 8px; color: #ccc; cursor: pointer;">
+                        <input type="checkbox" id="bacnet-enabled" style="width: auto;">
+                        Enable BACnet/IP server
+                    </label>
+                    <div class="form-hint">Read-only. Exposes each assigned sensor channel as a BACnet Analog Input. BACnet has no authentication, so only enable it on a trusted building-controls network.</div>
+                </div>
+                <div class="form-group">
+                    <label for="bacnet-port">UDP Port</label>
+                    <input type="number" id="bacnet-port" min="1" max="65535" placeholder="47808">
+                    <div class="form-hint">47808 (0xBAC0) is the standard BACnet/IP port</div>
+                </div>
+                <div class="form-group">
+                    <label for="bacnet-device-instance">Device Instance</label>
+                    <input type="number" id="bacnet-device-instance" min="0" max="4194302" placeholder="12345">
+                    <div class="form-hint">BACnet device instance, 0-4194302. Defaults to a stable value derived from the Ethernet MAC.</div>
+                </div>
+                <div class="form-group">
+                    <label for="bacnet-device-name">Device Name</label>
+                    <input type="text" id="bacnet-device-name" maxlength="63" placeholder="Thermux">
+                    <div class="form-hint">BACnet Device object name. Leave blank to use the device hostname.</div>
+                </div>
+                <div class="current-value" id="bacnet-info">Loading...</div>
+                <button type="submit" class="btn btn-primary">💾 Save BACnet/IP Settings</button>
+            </form>
         </div>
 
         <div class="config-section" id="panel-firmware">
@@ -748,6 +782,7 @@
                 document.getElementById('resolution').value = sensor.resolution;
                 
                 await loadModbus();
+                await loadBacnet();
 
                 /* Load auth config */
                 const authResp = await fetch('/api/config/auth', {cache: 'no-store'});
@@ -1243,6 +1278,37 @@
             await loadModbusChannels();
         }
 
+
+        function renderBacnet(bn) {
+            const badge = document.getElementById('bacnet-status');
+            badge.textContent = bn.running ? 'Running' : (bn.enabled ? 'Error' : 'Off');
+            badge.className = 'status-badge ' + (bn.running ? 'status-connected' : 'status-disconnected');
+            document.getElementById('bacnet-enabled').checked = !!bn.enabled;
+            document.getElementById('bacnet-port').value = bn.udp_port || 47808;
+            document.getElementById('bacnet-device-instance').value = bn.device_instance ?? 0;
+            document.getElementById('bacnet-device-name').value = bn.device_name || '';
+            const lines = [];
+            if (bn.error) lines.push(bn.error);
+            lines.push(`Objects: ${bn.objects || 0} Analog Input(s)`);
+            if (bn.running) {
+                if (bn.bound_ip) lines.push(`Bound to ${bn.bound_ip}:${bn.udp_port}`);
+                lines.push(bn.last_packet_age_s === null || bn.last_packet_age_s === undefined
+                    ? 'No packets yet'
+                    : `Packets served: ${bn.packets || 0} (last ${formatAge(bn.last_packet_age_s)})`);
+            }
+            document.getElementById('bacnet-info').textContent = lines.join(' · ');
+        }
+
+        async function loadBacnet() {
+            try {
+                const resp = await fetch('/api/bacnet', {cache: 'no-store'});
+                if (checkAuthError(resp)) return;
+                if (resp.ok) renderBacnet(await resp.json());
+            } catch (err) {
+                document.getElementById('bacnet-info').textContent = 'Could not load BACnet/IP settings';
+            }
+        }
+
         let modbusChannels = [];
         let modbusChannelCapacity = 100;
 
@@ -1460,6 +1526,29 @@
                 }
                 if (result.port !== undefined) renderModbus(result);
             } catch (err) { showToast('Error saving Modbus settings', true); }
+        });
+
+
+        document.getElementById('bacnet-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const enabled = document.getElementById('bacnet-enabled').checked;
+            const udpPort = Number(document.getElementById('bacnet-port').value);
+            const deviceInstance = Number(document.getElementById('bacnet-device-instance').value);
+            const deviceName = document.getElementById('bacnet-device-name').value.trim();
+            if (!Number.isInteger(udpPort) || udpPort < 1 || udpPort > 65535) { showToast('UDP port must be between 1 and 65535', true); return; }
+            if (!Number.isInteger(deviceInstance) || deviceInstance < 0 || deviceInstance > 4194302) { showToast('Device instance must be between 0 and 4194302', true); return; }
+            try {
+                const resp = await fetch('/api/bacnet', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled, udp_port: udpPort, device_instance: deviceInstance, device_name: deviceName })
+                });
+                if (checkAuthError(resp)) return;
+                const result = await resp.json().catch(() => ({}));
+                if (resp.ok) showToast('BACnet/IP settings saved');
+                else showToast(result.message || 'Failed to save BACnet/IP settings', true);
+                if (result.udp_port !== undefined) renderBacnet(result);
+            } catch (err) { showToast('Error saving BACnet/IP settings', true); }
         });
 
         document.getElementById('sensor-form').addEventListener('submit', async (e) => {
@@ -1719,7 +1808,7 @@
             if (!restoreFile) return;
             if (!await confirmDialog({
                 title: 'Restore this backup?',
-                message: 'This will overwrite sensor names, Modbus channels and any settings included in the backup file, then restart the device.',
+                message: 'This will overwrite sensor names, Modbus channels, BACnet/IP settings and any settings included in the backup file, then restart the device.',
                 confirmText: 'Restore and restart',
                 danger: true
             })) return;

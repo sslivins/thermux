@@ -76,6 +76,20 @@ function defaultState() {
             channels_assigned: 0,
             sensors_without_channel: 0,
         },
+        bacnet: {
+            enabled: false,
+            udp_port: 47808,
+            device_instance: 12345,
+            device_name: 'Thermux',
+            running: false,
+            error: null,
+            bound_ip: '',
+            packets: 0,
+            objects: 0,
+            last_packet_age_s: null,
+        },
+        /** When set, POST /api/bacnet fails with this message (simulates a UDP port that won't bind) */
+        bacnetFailMessage: null,
         /** When set, POST /api/modbus fails with this message (simulates a port that won't bind) */
         modbusFailMessage: null,
         /** Assigned Modbus channels, as returned by GET /api/modbus/channels */
@@ -98,6 +112,7 @@ function defaultState() {
             sensor_names: [],
             sensor_settings: { read_interval_ms: 10000, publish_interval_ms: 30000, resolution: 12 },
             modbus: { enabled: false, port: 502, unit_id: 1, channels: [] },
+            bacnet: { enabled: false, udp_port: 47808, device_instance: 12345, device_name: 'Thermux' },
         },
     };
 }
@@ -220,6 +235,27 @@ function createMockServer() {
             if (typeof parsed.unit_id === 'number') state.modbus.unit_id = parsed.unit_id;
             state.modbus.running = state.modbus.enabled;
             return sendJson(res, 200, { success: true, message: 'Modbus settings saved', ...state.modbus });
+        }
+        if (req.method === 'GET' && url.pathname === '/api/bacnet') {
+            return sendJson(res, 200, state.bacnet);
+        }
+        if (req.method === 'POST' && url.pathname === '/api/bacnet') {
+            let parsed;
+            try {
+                parsed = JSON.parse(body);
+            } catch {
+                return sendJson(res, 400, { error: 'Invalid JSON' });
+            }
+            if (state.bacnetFailMessage) {
+                return sendJson(res, 500, { success: false, message: state.bacnetFailMessage, ...state.bacnet });
+            }
+            if (typeof parsed.enabled === 'boolean') state.bacnet.enabled = parsed.enabled;
+            if (typeof parsed.udp_port === 'number') state.bacnet.udp_port = parsed.udp_port;
+            if (typeof parsed.device_instance === 'number') state.bacnet.device_instance = parsed.device_instance;
+            if (typeof parsed.device_name === 'string') state.bacnet.device_name = parsed.device_name;
+            state.bacnet.running = state.bacnet.enabled;
+            state.bacnet.bound_ip = state.bacnet.running ? state.status.ethernet_ip : '';
+            return sendJson(res, 200, { success: true, message: 'BACnet/IP settings saved', ...state.bacnet });
         }
         if (req.method === 'GET' && url.pathname === '/api/modbus/channels') {
             return sendJson(res, 200, { channel_capacity: 100, channels: state.modbusChannels });

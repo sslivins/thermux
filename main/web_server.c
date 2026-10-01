@@ -13,6 +13,7 @@
 #include "log_buffer.h"
 #include "mqtt_client_ha.h"
 #include "modbus_server.h"
+#include "bacnet_server.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -308,6 +309,15 @@ static bool check_api_auth(httpd_req_t *req)
 /**
  * @brief Handler for GET /
  */
+/* cJSON_Print* returns NULL when the heap is exhausted; never strlen() it. */
+static esp_err_t send_json_string(httpd_req_t *req, const char *json)
+{
+    if (json == NULL) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+    }
+    return httpd_resp_send(req, json, strlen(json));
+}
+
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
     CHECK_PAGE_AUTH(req);
@@ -395,7 +405,7 @@ static esp_err_t api_status_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -446,7 +456,7 @@ static esp_err_t api_sensors_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -468,7 +478,7 @@ static esp_err_t api_sensors_rescan_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -490,7 +500,7 @@ static esp_err_t api_error_stats_reset_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -532,7 +542,7 @@ static esp_err_t api_sensor_error_stats_reset_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     return ESP_OK;
@@ -618,7 +628,7 @@ static esp_err_t api_sensor_name_handler(httpd_req_t *req)
     cJSON_Delete(response);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -650,7 +660,7 @@ static esp_err_t api_ota_channel_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     return ESP_OK;
 }
@@ -734,7 +744,7 @@ static esp_err_t api_ota_check_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -791,7 +801,7 @@ static esp_err_t api_ota_status_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -814,7 +824,7 @@ static esp_err_t api_ota_update_handler(httpd_req_t *req)
         cJSON_Delete(root);
         
         httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req, json, strlen(json));
+        send_json_string(req, json);
         free(json);
         
         /* Start OTA in background */
@@ -827,7 +837,7 @@ static esp_err_t api_ota_update_handler(httpd_req_t *req)
         cJSON_Delete(root);
         
         httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req, json, strlen(json));
+        send_json_string(req, json);
         free(json);
     }
 #else
@@ -838,7 +848,7 @@ static esp_err_t api_ota_update_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 #endif
     
@@ -1041,7 +1051,7 @@ static esp_err_t api_wifi_scan_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1102,7 +1112,7 @@ static esp_err_t api_logs_level_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     return ESP_OK;
 }
@@ -1179,7 +1189,7 @@ static esp_err_t api_config_wifi_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1237,7 +1247,7 @@ static esp_err_t api_config_wifi_post_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1274,7 +1284,7 @@ static esp_err_t api_config_mqtt_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1349,7 +1359,7 @@ static esp_err_t api_config_mqtt_post_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1374,7 +1384,7 @@ static esp_err_t api_mqtt_reconnect_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1450,7 +1460,7 @@ static esp_err_t api_config_sensor_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1532,7 +1542,7 @@ static esp_err_t api_config_sensor_post_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -1554,7 +1564,7 @@ static esp_err_t api_system_restart_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     /* Delay restart to allow response to be sent */
@@ -1586,7 +1596,7 @@ static esp_err_t api_system_factory_reset_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     if (err == ESP_OK) {
@@ -1699,6 +1709,16 @@ static esp_err_t api_backup_get_handler(httpd_req_t *req)
     cJSON_AddItemToObject(modbus, "channels", mb_channels);
     cJSON_AddItemToObject(root, "modbus", modbus);
 
+    /* BACnet/IP settings: no secrets, so always included */
+    bacnet_status_t bn_status;
+    bacnet_server_get_status(&bn_status);
+    cJSON *bacnet = cJSON_CreateObject();
+    cJSON_AddBoolToObject(bacnet, "enabled", bn_status.config.enabled);
+    cJSON_AddNumberToObject(bacnet, "udp_port", bn_status.config.udp_port);
+    cJSON_AddNumberToObject(bacnet, "device_instance", bn_status.config.device_instance);
+    cJSON_AddStringToObject(bacnet, "device_name", bn_status.config.device_name);
+    cJSON_AddItemToObject(root, "bacnet", bacnet);
+
     if (include_mqtt) {
         char uri[128] = "", user[64] = "", pass[64] = "";
         nvs_storage_load_mqtt_config(uri, sizeof(uri), user, sizeof(user), pass, sizeof(pass));
@@ -1735,7 +1755,7 @@ static esp_err_t api_backup_get_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"thermux-backup.json\"");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     return ESP_OK;
@@ -1825,7 +1845,7 @@ static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
         }
     }
 
-    bool mqtt_restored = false, wifi_restored = false, auth_restored = false;
+    bool mqtt_restored = false, wifi_restored = false, auth_restored = false, bacnet_restored = false;
 
     cJSON *mqtt = cJSON_GetObjectItem(root, "mqtt");
     if (cJSON_IsObject(mqtt)) {
@@ -1916,11 +1936,38 @@ static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
         free(table);
     }
 
+    cJSON *bacnet = cJSON_GetObjectItem(root, "bacnet");
+    if (cJSON_IsObject(bacnet)) {
+        bacnet_config_t bn_cfg;
+        int port = 0;
+        int instance = 0;
+        cJSON *bn_enabled = cJSON_GetObjectItem(bacnet, "enabled");
+        cJSON *bn_name = cJSON_GetObjectItem(bacnet, "device_name");
+        bool cfg_ok = cJSON_IsBool(bn_enabled) &&
+                      json_int_in_range(cJSON_GetObjectItem(bacnet, "udp_port"), 1, 65535, &port) &&
+                      json_int_in_range(cJSON_GetObjectItem(bacnet, "device_instance"), 0, BACNET_MAX_DEVICE_INSTANCE, &instance) &&
+                      bacnet_config_valid((uint32_t)port, (uint32_t)instance, CONFIG_WEB_SERVER_PORT);
+        if (cfg_ok) {
+            bn_cfg.enabled = cJSON_IsTrue(bn_enabled);
+            bn_cfg.udp_port = (uint16_t)port;
+            bn_cfg.device_instance = (uint32_t)instance;
+            strlcpy(bn_cfg.device_name, cJSON_IsString(bn_name) ? bn_name->valuestring : "", sizeof(bn_cfg.device_name));
+            esp_err_t bn_err = bacnet_server_restore(&bn_cfg);
+            if (bn_err == ESP_OK) {
+                bacnet_restored = true;
+            } else {
+                ESP_LOGE(TAG, "Failed to restore BACnet settings: %s", esp_err_to_name(bn_err));
+            }
+        } else {
+            ESP_LOGW(TAG, "Backup has invalid BACnet settings; keeping the current ones");
+        }
+    }
+
     cJSON_Delete(root);
 
-    ESP_LOGW(TAG, "Backup restored: %d sensor name(s), mqtt=%d wifi=%d auth=%d modbus=%d (%d channel(s), %d skipped)",
+    ESP_LOGW(TAG, "Backup restored: %d sensor name(s), mqtt=%d wifi=%d auth=%d modbus=%d bacnet=%d (%d channel(s), %d skipped)",
              names_restored, mqtt_restored, wifi_restored, auth_restored,
-             modbus_restored, mb_channels_restored, mb_channels_skipped);
+             modbus_restored, bacnet_restored, mb_channels_restored, mb_channels_skipped);
 
     cJSON *response = cJSON_CreateObject();
     cJSON_AddBoolToObject(response, "success", true);
@@ -1929,6 +1976,7 @@ static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(response, "wifi_restored", wifi_restored);
     cJSON_AddBoolToObject(response, "auth_restored", auth_restored);
     cJSON_AddBoolToObject(response, "modbus_restored", modbus_restored);
+    cJSON_AddBoolToObject(response, "bacnet_restored", bacnet_restored);
     cJSON_AddNumberToObject(response, "modbus_channels_restored", mb_channels_restored);
     cJSON_AddNumberToObject(response, "modbus_channels_skipped", mb_channels_skipped);
     cJSON_AddStringToObject(response, "message", "Restore complete. Restarting...");
@@ -1937,7 +1985,7 @@ static esp_err_t api_backup_restore_post_handler(httpd_req_t *req)
     cJSON_Delete(response);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     /* Delay restart to allow response to be sent */
@@ -2017,7 +2065,7 @@ static esp_err_t api_auth_login_handler(httpd_req_t *req)
     cJSON_Delete(response);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     return ESP_OK;
@@ -2066,7 +2114,7 @@ static esp_err_t api_auth_logout_handler(httpd_req_t *req)
     cJSON_Delete(response);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     return ESP_OK;
@@ -2090,7 +2138,7 @@ static esp_err_t api_auth_status_handler(httpd_req_t *req)
     cJSON_Delete(response);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
 
     return ESP_OK;
@@ -2115,7 +2163,7 @@ static esp_err_t api_config_auth_get_handler(httpd_req_t *req)
     cJSON_Delete(root);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -2180,7 +2228,7 @@ static esp_err_t api_config_auth_post_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -2214,7 +2262,7 @@ static esp_err_t api_config_auth_regenerate_key_handler(httpd_req_t *req)
     cJSON_Delete(response);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     
     return ESP_OK;
@@ -2249,6 +2297,36 @@ static void add_modbus_status(cJSON *obj)
     cJSON_AddNumberToObject(obj, "sensors_without_channel", st.sensors_without_channel);
 }
 
+
+/**
+ * @brief Add BACnet/IP settings and runtime state to a JSON object
+ */
+static void add_bacnet_status(cJSON *obj)
+{
+    bacnet_status_t st;
+    bacnet_server_get_status(&st);
+    cJSON_AddBoolToObject(obj, "enabled", st.config.enabled);
+    cJSON_AddNumberToObject(obj, "udp_port", st.config.udp_port);
+    cJSON_AddNumberToObject(obj, "device_instance", st.config.device_instance);
+    cJSON_AddStringToObject(obj, "device_name", st.config.device_name);
+    cJSON_AddBoolToObject(obj, "running", st.running);
+    if (st.last_error[0]) {
+        cJSON_AddStringToObject(obj, "error", st.last_error);
+    } else {
+        cJSON_AddNullToObject(obj, "error");
+    }
+    cJSON_AddStringToObject(obj, "bound_ip", st.bound_ip);
+    cJSON_AddNumberToObject(obj, "packets", st.packets);
+    cJSON_AddNumberToObject(obj, "objects", st.objects);
+    cJSON_AddNumberToObject(obj, "stack_free_min", st.stack_free_min);
+    if (st.last_packet_ms > 0) {
+        int64_t age_s = (esp_timer_get_time() / 1000 - st.last_packet_ms) / 1000;
+        cJSON_AddNumberToObject(obj, "last_packet_age_s", (double)age_s);
+    } else {
+        cJSON_AddNullToObject(obj, "last_packet_age_s");
+    }
+}
+
 static esp_err_t send_json(httpd_req_t *req, cJSON *root)
 {
     char *json = cJSON_PrintUnformatted(root);
@@ -2258,7 +2336,7 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *root)
         return ESP_FAIL;
     }
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
+    send_json_string(req, json);
     free(json);
     return ESP_OK;
 }
@@ -2350,6 +2428,101 @@ static esp_err_t api_modbus_post_handler(httpd_req_t *req)
         cJSON_AddStringToObject(resp, "message", msg);
     }
     add_modbus_status(resp);
+    return send_json(req, resp);
+}
+
+
+/**
+ * @brief Handler for GET /api/bacnet
+ */
+static esp_err_t api_bacnet_get_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    cJSON *root = cJSON_CreateObject();
+    add_bacnet_status(root);
+    return send_json(req, root);
+}
+
+/**
+ * @brief Handler for POST /api/bacnet
+ *
+ * Body: {"enabled": bool, "udp_port": 1-65535, "device_instance": 0-4194302,
+ *        "device_name": string}; omitted fields keep their current value.
+ */
+static esp_err_t api_bacnet_post_handler(httpd_req_t *req)
+{
+    CHECK_AUTH(req);
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_FAIL;
+    }
+    content[ret] = '\0';
+
+    cJSON *body = cJSON_Parse(content);
+    if (body == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    bacnet_status_t st;
+    bacnet_server_get_status(&st);
+    bacnet_config_t cfg = st.config;
+    bool bad = false;
+
+    cJSON *item = cJSON_GetObjectItem(body, "enabled");
+    if (item) {
+        if (cJSON_IsBool(item)) cfg.enabled = cJSON_IsTrue(item);
+        else bad = true;
+    }
+    item = cJSON_GetObjectItem(body, "udp_port");
+    if (!item) item = cJSON_GetObjectItem(body, "port");
+    if (item) {
+        if (cJSON_IsNumber(item) && item->valuedouble >= 1 && item->valuedouble <= 65535 &&
+            item->valuedouble == (double)item->valueint) {
+            cfg.udp_port = (uint16_t)item->valueint;
+        } else {
+            bad = true;
+        }
+    }
+    item = cJSON_GetObjectItem(body, "device_instance");
+    if (item) {
+        if (cJSON_IsNumber(item) && item->valuedouble >= 0 && item->valuedouble <= BACNET_MAX_DEVICE_INSTANCE &&
+            item->valuedouble == (double)item->valueint) {
+            cfg.device_instance = (uint32_t)item->valueint;
+        } else {
+            bad = true;
+        }
+    }
+    item = cJSON_GetObjectItem(body, "device_name");
+    if (item) {
+        if (cJSON_IsString(item)) strlcpy(cfg.device_name, item->valuestring, sizeof(cfg.device_name));
+        else bad = true;
+    }
+    cJSON_Delete(body);
+
+    if (bad || !bacnet_config_valid(cfg.udp_port, cfg.device_instance, CONFIG_WEB_SERVER_PORT)) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddBoolToObject(resp, "success", false);
+        cJSON_AddStringToObject(resp, "message", "UDP port must be 1-65535 (not the web server port) and device instance 0-4194302");
+        return send_json(req, resp);
+    }
+
+    esp_err_t err = bacnet_server_apply_config(&cfg);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "success", err == ESP_OK);
+    if (err == ESP_OK) {
+        cJSON_AddStringToObject(resp, "message", "BACnet/IP settings saved");
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        char msg[112];
+        snprintf(msg, sizeof(msg), "Could not apply BACnet/IP settings (%s); previous settings kept", esp_err_to_name(err));
+        cJSON_AddStringToObject(resp, "message", msg);
+    }
+    add_bacnet_status(resp);
     return send_json(req, resp);
 }
 
@@ -2813,6 +2986,21 @@ esp_err_t web_server_start(void)
         .handler = api_modbus_channels_post_handler,
     };
     REGISTER_URI(modbus_channels_post_uri);
+
+    /* BACnet/IP endpoints */
+    httpd_uri_t bacnet_get_uri = {
+        .uri = "/api/bacnet",
+        .method = HTTP_GET,
+        .handler = api_bacnet_get_handler,
+    };
+    REGISTER_URI(bacnet_get_uri);
+
+    httpd_uri_t bacnet_post_uri = {
+        .uri = "/api/bacnet",
+        .method = HTTP_POST,
+        .handler = api_bacnet_post_handler,
+    };
+    REGISTER_URI(bacnet_post_uri);
 
     /* System endpoints */
     httpd_uri_t system_restart_uri = {
